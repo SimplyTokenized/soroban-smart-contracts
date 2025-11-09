@@ -1,0 +1,442 @@
+#![no_std]
+
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Bytes, Env, IntoVal, Symbol};
+use stellar_ownable::{self as ownable, Ownable};
+use stellar_ownable_macro::only_owner;
+use stellar_pausable::{self as pausable, Pausable};
+use stellar_pausable_macros::when_not_paused;
+use stellar_upgradeable::UpgradeableInternal;
+use stellar_upgradeable_macros::Upgradeable;
+use stellar_default_impl_macro::default_impl;
+
+// Storage keys
+const TOKEN_CONTRACT_KEY: &str = "token_contract";
+const TREASURY_KEY: &str = "treasury";
+const SALE_START_KEY: &str = "sale_start";
+const SALE_END_KEY: &str = "sale_end";
+const PRICE_NUM_KEY: &str = "price_num";
+const PRICE_DEN_KEY: &str = "price_den";
+const GLOBAL_CAP_KEY: &str = "global_cap";
+const TOTAL_SOLD_KEY: &str = "total_sold";
+const MIN_CONTRIBUTION_KEY: &str = "min_contribution";
+
+#[derive(Clone)]
+#[contracttype]
+pub enum DataKey {
+    SupportedAsset(Address),
+    Whitelist(Address),
+    UserAllocation(Address),
+    UserCap(Address),
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct SaleConfig {
+    pub start_time: u64,
+    pub end_time: u64,
+    pub price_numerator: i128,
+    pub price_denominator: i128,
+    pub global_cap: i128,
+    pub min_contribution: i128,
+}
+
+#[derive(Upgradeable)]
+#[contract]
+pub struct CrowdsaleContract;
+
+#[contractimpl]
+impl CrowdsaleContract {
+    /// Initialize the crowdsale contract
+    pub fn __constructor(
+        e: &Env,
+        owner: Address,
+        token_contract: Address,
+        treasury: Address,
+    ) {
+        // Set ownership
+        ownable::set_owner(e, &owner);
+        
+        // Store token contract and treasury addresses
+        e.storage()
+            .persistent()
+            .set(
+                &Bytes::from_slice(e, TOKEN_CONTRACT_KEY.as_bytes()),
+                &token_contract,
+            );
+        
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()), &treasury);
+        
+        // Initialize total sold to 0
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, TOTAL_SOLD_KEY.as_bytes()), &0i128);
+    }
+
+    /// Configure sale parameters (owner only)
+    #[only_owner]
+    pub fn open_sale(
+        e: &Env,
+        _caller: Address,
+        start_time: u64,
+        end_time: u64,
+        price_numerator: i128,
+        price_denominator: i128,
+        global_cap: i128,
+        min_contribution: i128,
+    ) {
+        if end_time <= start_time {
+            panic!("Invalid time range");
+        }
+        
+        if price_numerator <= 0 || price_denominator <= 0 {
+            panic!("Invalid price");
+        }
+        
+        if global_cap <= 0 {
+            panic!("Invalid cap");
+        }
+        
+        // Store sale configuration
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, SALE_START_KEY.as_bytes()), &start_time);
+        
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, SALE_END_KEY.as_bytes()), &end_time);
+        
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()), &price_numerator);
+        
+        e.storage()
+            .persistent()
+            .set(
+                &Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()),
+                &price_denominator,
+            );
+        
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, GLOBAL_CAP_KEY.as_bytes()), &global_cap);
+        
+        e.storage()
+            .persistent()
+            .set(
+                &Bytes::from_slice(e, MIN_CONTRIBUTION_KEY.as_bytes()),
+                &min_contribution,
+            );
+    }
+
+    /// Add or remove supported stablecoin asset (owner only)
+    #[only_owner]
+    pub fn support_asset(e: &Env, _caller: Address, asset_contract: Address, enabled: bool) {
+        e.storage()
+            .persistent()
+            .set(&DataKey::SupportedAsset(asset_contract.clone()), &enabled);
+    }
+
+    /// Set whitelist status for buyer (owner only)
+    #[only_owner]
+    pub fn set_whitelist(e: &Env, _caller: Address, buyer: Address, whitelisted: bool) {
+        e.storage()
+            .persistent()
+            .set(&DataKey::Whitelist(buyer.clone()), &whitelisted);
+    }
+
+    /// Set per-user contribution cap (owner only)
+    #[only_owner]
+    pub fn set_user_cap(e: &Env, _caller: Address, buyer: Address, cap: i128) {
+        e.storage()
+            .persistent()
+            .set(&DataKey::UserCap(buyer.clone()), &cap);
+    }
+
+    /// Main buy function - purchase tokens with supported stablecoin
+    #[when_not_paused]
+    pub fn buy(e: &Env, buyer: Address, asset_contract: Address, amount: i128) {
+        buyer.require_auth();
+        
+        // Check sale timing
+        let current_time = e.ledger().timestamp();
+        let start_time: u64 = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, SALE_START_KEY.as_bytes()))
+            .unwrap_or_else(|| panic!("Sale not configured"));
+        
+        let end_time: u64 = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, SALE_END_KEY.as_bytes()))
+            .unwrap();
+        
+        if current_time < start_time {
+            panic!("Sale not started");
+        }
+        
+        if current_time >= end_time {
+            panic!("Sale ended");
+        }
+        
+        // Check minimum contribution
+        let min_contribution: i128 = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, MIN_CONTRIBUTION_KEY.as_bytes()))
+            .unwrap_or(0i128);
+        
+        if amount < min_contribution {
+            panic!("Below minimum contribution");
+        }
+        
+        // Check asset is supported
+        let asset_enabled: bool = e
+            .storage()
+            .persistent()
+            .get(&DataKey::SupportedAsset(asset_contract.clone()))
+            .unwrap_or(false);
+        
+        if !asset_enabled {
+            panic!("Asset not supported");
+        }
+        
+        // Check whitelist
+        let whitelisted: bool = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Whitelist(buyer.clone()))
+            .unwrap_or(false);
+        
+        if !whitelisted {
+            panic!("Not whitelisted");
+        }
+        
+        // Calculate tokens to allocate
+        let price_num: i128 = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()))
+            .unwrap();
+        
+        let price_den: i128 = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
+            .unwrap();
+        
+        let tokens = (amount * price_num) / price_den;
+        
+        if tokens <= 0 {
+            panic!("Invalid token amount");
+        }
+        
+        // Check user cap
+        let user_cap: i128 = e
+            .storage()
+            .persistent()
+            .get(&DataKey::UserCap(buyer.clone()))
+            .unwrap_or(i128::MAX);
+        
+        let user_allocation: i128 = e
+            .storage()
+            .persistent()
+            .get(&DataKey::UserAllocation(buyer.clone()))
+            .unwrap_or(0i128);
+        
+        if user_allocation + tokens > user_cap {
+            panic!("Exceeds user cap");
+        }
+        
+        // Check global cap
+        let global_cap: i128 = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, GLOBAL_CAP_KEY.as_bytes()))
+            .unwrap();
+        
+        let total_sold: i128 = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, TOTAL_SOLD_KEY.as_bytes()))
+            .unwrap_or(0i128);
+        
+        if total_sold + tokens > global_cap {
+            panic!("Exceeds global cap");
+        }
+        
+        // Transfer stablecoin from buyer to treasury
+        let treasury: Address = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()))
+            .unwrap();
+        
+        let stablecoin_client = token::Client::new(e, &asset_contract);
+        stablecoin_client.transfer(&buyer, &treasury, &amount);
+        
+        // Mint tokens to buyer (requires this contract to have minter role)
+        let token_contract: Address = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, TOKEN_CONTRACT_KEY.as_bytes()))
+            .unwrap();
+        
+        // Call mint function on the token contract
+        e.invoke_contract::<()>(
+            &token_contract,
+            &Symbol::new(e, "mint"),
+            (buyer.clone(), tokens).into_val(e),
+        );
+        
+        // Update state
+        e.storage()
+            .persistent()
+            .set(
+                &DataKey::UserAllocation(buyer.clone()),
+                &(user_allocation + tokens),
+            );
+        
+        e.storage()
+            .persistent()
+            .set(
+                &Bytes::from_slice(e, TOTAL_SOLD_KEY.as_bytes()),
+                &(total_sold + tokens),
+            );
+    }
+
+    /// Finalize sale after end time (owner only)
+    #[only_owner]
+    pub fn finalize_sale(e: &Env, _caller: Address) {
+        let current_time = e.ledger().timestamp();
+        let end_time: u64 = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, SALE_END_KEY.as_bytes()))
+            .unwrap_or_else(|| panic!("Sale not configured"));
+        
+        if current_time < end_time {
+            panic!("Sale not ended");
+        }
+        
+        // Sale finalization logic can be added here
+        // e.g., distribute remaining tokens, lock contract, etc.
+    }
+
+    // ========== View Functions ==========
+
+    pub fn get_sale_config(e: &Env) -> SaleConfig {
+        SaleConfig {
+            start_time: e
+                .storage()
+                .persistent()
+                .get(&Bytes::from_slice(e, SALE_START_KEY.as_bytes()))
+                .unwrap_or(0u64),
+            end_time: e
+                .storage()
+                .persistent()
+                .get(&Bytes::from_slice(e, SALE_END_KEY.as_bytes()))
+                .unwrap_or(0u64),
+            price_numerator: e
+                .storage()
+                .persistent()
+                .get(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()))
+                .unwrap_or(0i128),
+            price_denominator: e
+                .storage()
+                .persistent()
+                .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
+                .unwrap_or(1i128),
+            global_cap: e
+                .storage()
+                .persistent()
+                .get(&Bytes::from_slice(e, GLOBAL_CAP_KEY.as_bytes()))
+                .unwrap_or(0i128),
+            min_contribution: e
+                .storage()
+                .persistent()
+                .get(&Bytes::from_slice(e, MIN_CONTRIBUTION_KEY.as_bytes()))
+                .unwrap_or(0i128),
+        }
+    }
+
+    pub fn total_sold(e: &Env) -> i128 {
+        e.storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, TOTAL_SOLD_KEY.as_bytes()))
+            .unwrap_or(0i128)
+    }
+
+    pub fn user_allocation(e: &Env, buyer: Address) -> i128 {
+        e.storage()
+            .persistent()
+            .get(&DataKey::UserAllocation(buyer))
+            .unwrap_or(0i128)
+    }
+
+    pub fn is_whitelisted(e: &Env, buyer: Address) -> bool {
+        e.storage()
+            .persistent()
+            .get(&DataKey::Whitelist(buyer))
+            .unwrap_or(false)
+    }
+
+    pub fn is_asset_supported(e: &Env, asset_contract: Address) -> bool {
+        e.storage()
+            .persistent()
+            .get(&DataKey::SupportedAsset(asset_contract))
+            .unwrap_or(false)
+    }
+
+    pub fn token_contract(e: &Env) -> Address {
+        e.storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, TOKEN_CONTRACT_KEY.as_bytes()))
+            .unwrap()
+    }
+
+    pub fn treasury(e: &Env) -> Address {
+        e.storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()))
+            .unwrap()
+    }
+}
+
+//
+// ─── Pausable Implementation ─────────────────────────────────────────────────
+//
+#[contractimpl]
+impl Pausable for CrowdsaleContract {
+    fn paused(e: &Env) -> bool {
+        pausable::paused(e)
+    }
+
+    #[only_owner]
+    fn pause(e: &Env, _caller: Address) {
+        pausable::pause(e);
+    }
+
+    #[only_owner]
+    fn unpause(e: &Env, _caller: Address) {
+        pausable::unpause(e);
+    }
+}
+
+//
+// ─── Ownable Implementation ──────────────────────────────────────────────────
+//
+#[default_impl]
+#[contractimpl]
+impl Ownable for CrowdsaleContract {}
+
+//
+// ─── Upgradeable Implementation ──────────────────────────────────────────────
+//
+impl UpgradeableInternal for CrowdsaleContract {
+    fn _require_auth(e: &Env, _operator: &Address) {
+        ownable::enforce_owner_auth(e);
+    }
+}

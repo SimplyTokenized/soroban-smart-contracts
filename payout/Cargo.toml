@@ -1,0 +1,33 @@
+[package]
+name = "payout"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/SimplyTokenized/soroban-smart-contracts"
+
+[lib]
+crate-type = ["cdylib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = "22.0.8"
+
+# OpenZeppelin Stellar contracts from GitHub
+stellar-tokens = { git = "https://github.com/OpenZeppelin/stellar-contracts", tag = "v0.4.1" }
+stellar-macros = { git = "https://github.com/OpenZeppelin/stellar-contracts", tag = "v0.4.1" }
+
+stellar-access = { git = "https://github.com/OpenZeppelin/stellar-contracts", tag = "v0.4.1" }
+stellar-ownable = { git = "https://github.com/OpenZeppelin/stellar-contracts", tag = "v0.3.0" }
+stellar-ownable-macro = { git = "https://github.com/OpenZeppelin/stellar-contracts", tag = "v0.3.0" }
+
+stellar-pausable = { git = "https://github.com/OpenZeppelin/stellar-contracts", tag = "v0.3.0" }
+stellar-pausable-macros = { git = "https://github.com/OpenZeppelin/stellar-contracts", tag = "v0.3.0" }
+
+stellar-upgradeable = { git = "https://github.com/OpenZeppelin/stellar-contracts", tag = "v0.3.0" }
+stellar-upgradeable-macros = { git = "https://github.com/OpenZeppelin/stellar-contracts", tag = "v0.3.0" }
+
+stellar-default-impl-macro = { git = "https://github.com/OpenZeppelin/stellar-contracts", tag = "v0.3.0" }
+stellar-non-fungible = { git = "https://github.com/OpenZeppelin/stellar-contracts", tag = "v0.3.0" }
+
+[dev-dependencies]
+soroban-sdk = { version = "22.0.8", features = ["testutils"] }
