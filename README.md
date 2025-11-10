@@ -38,9 +38,45 @@ This repository contains three interconnected smart contracts built with [Soroba
 
 ### Prerequisites
 
-- [Rust](https://www.rust-lang.org/tools/install) (latest stable version)
-- [Soroban CLI](https://soroban.stellar.org/docs/getting-started/setup)
-- [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools) (optional, for deployment)
+- **1. Install Rust**
+
+Install Rust using rustup:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Then restart your terminal.
+
+- **2. Add WebAssembly Target**
+
+Add the WebAssembly target for Stellar smart contracts:
+
+```bash
+rustup target add wasm32v1-none
+```
+
+- **3. Install Stellar CLI**
+
+#### macOS/Linux (using Homebrew):
+```bash
+brew install stellar-cli
+```
+
+#### Windows (using winget):
+```powershell
+winget install --id Stellar.StellarCLI
+```
+
+#### Or install with Cargo:
+```bash
+cargo install --locked stellar-cli@latest
+```
+
+- **4. Recommended Development Tools**
+  - [Visual Studio Code](https://code.visualstudio.com/)
+  - [Rust Analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+  - [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb)
 
 ### Installation
 
@@ -50,30 +86,38 @@ This repository contains three interconnected smart contracts built with [Soroba
    cd soroban-smart-contracts
    ```
 
-2. **Install Soroban CLI**
+2. **Build all contracts**
    ```bash
-   cargo install --locked soroban-cli
+   make build
    ```
-
-3. **Build all contracts**
+   
+   Or build a specific contract:
    ```bash
-   cargo build --release --target wasm32-unknown-unknown
+   cd token && make build
    ```
 
 ## Development
+
+### Available Commands
+
+- `make` or `make all`: Run tests for the contract
+- `make test`: Build and run tests
+- `make build`: Build the contract
+- `make fmt`: Format the code
+- `make clean`: Clean build artifacts
 
 ### Building Contracts
 
 Build all contracts in the workspace:
 ```bash
-cargo build --release --target wasm32-unknown-unknown
+cargo build --release --target wasm32v1-none
 ```
 
 Build a specific contract:
 ```bash
-cargo build --package token --release --target wasm32-unknown-unknown
-cargo build --package crowdsale --release --target wasm32-unknown-unknown
-cargo build --package payout --release --target wasm32-unknown-unknown
+cargo build --package token --release --target wasm32v1-none
+cargo build --package crowdsale --release --target wasm32v1-none
+cargo build --package payout --release --target wasm32v1-none
 ```
 
 ### Running Tests
@@ -98,7 +142,7 @@ The workspace is configured with aggressive optimization for WASM size:
 - Symbol stripping
 - Overflow checks enabled
 
-Optimized WASM files are generated in `target/wasm32-unknown-unknown/release/`.
+Optimized WASM files are generated in `target/wasm32v1-none/release/`.
 
 ## Contracts
 
@@ -141,7 +185,7 @@ Automated distribution system:
 2. **Deploy a contract**
    ```bash
    soroban contract deploy \
-     --wasm target/wasm32-unknown-unknown/release/token.wasm \
+     --wasm target/wasm32v1-none/release/token.wasm \
      --network standalone
    ```
 
@@ -164,7 +208,7 @@ Automated distribution system:
 3. **Deploy contract**
    ```bash
    soroban contract deploy \
-     --wasm target/wasm32-unknown-unknown/release/token.wasm \
+     --wasm target/wasm32v1-none/release/token.wasm \
      --source deployer \
      --network testnet
    ```
@@ -179,7 +223,7 @@ soroban network add mainnet \
   --network-passphrase "Public Global Stellar Network ; September 2015"
 
 soroban contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/token.wasm \
+  --wasm target/wasm32v1-none/release/token.wasm \
   --source mainnet-deployer \
   --network mainnet
 ```
