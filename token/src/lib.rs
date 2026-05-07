@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Bytes};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol};
 use stellar_ownable::{self as ownable, Ownable};
 use stellar_ownable_macro::only_owner;
 use stellar_pausable::{self as pausable, Pausable};
@@ -8,20 +8,20 @@ use stellar_pausable_macros::when_not_paused;
 use stellar_upgradeable::UpgradeableInternal;
 use stellar_upgradeable_macros::Upgradeable;
 use stellar_default_impl_macro::default_impl;
+use stellar_tokens::fungible::{FungibleToken, Base};
+use stellar_tokens::fungible::burnable::FungibleBurnable;
 
-// Storage keys
-const CAP_KEY: &str = "cap";
-const TOTAL_SUPPLY_KEY: &str = "total_supply";
-const NAME_KEY: &str = "name";
-const SYMBOL_KEY: &str = "symbol";
-const DECIMALS_KEY: &str = "decimals";
+// TTL constants for persistent storage (ledger-based)
+const MIN_TTL: u32 = 1_000_000;
+const TARGET_TTL: u32 = 1_500_000;
 
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
-    Balance(Address),
     MinterRole(Address),
-    Whitelist(Address),
+    AllowList(Address),
+    Initialized,
+    Cap,
 }
 
 #[derive(Upgradeable)]
@@ -39,40 +39,64 @@ impl TokenContract {
         symbol: String,
         decimals: u32,
     ) {
-        // Store token metadata
-        e.storage()
+        // Check if already initialized
+        let initialized: bool = e
+            .storage()
             .persistent()
-            .set(&Bytes::from_slice(e, NAME_KEY.as_bytes()), &name);
-        e.storage()
-            .persistent()
-            .set(&Bytes::from_slice(e, SYMBOL_KEY.as_bytes()), &symbol);
-        e.storage()
-            .persistent()
-            .set(&Bytes::from_slice(e, DECIMALS_KEY.as_bytes()), &decimals);
+            .get(&DataKey::Initialized)
+            .unwrap_or(false);
+        if initialized {
+            panic!("Contract already initialized");
+        }
+        
+        // Validate inputs
+        if cap <= 0 {
+            panic!("Cap must be positive");
+        }
+        
+        // Store token metadata using OpenZeppelin Base
+        Base::set_metadata(e, decimals, name, symbol);
         
         // Set ownership
         ownable::set_owner(e, &owner);
         
-        // Set the cap
+        // Set the cap with TTL extension
         e.storage()
             .persistent()
-            .set(&Bytes::from_slice(e, CAP_KEY.as_bytes()), &cap);
-        
-        // Initialize total supply to 0
+            .set(&DataKey::Cap, &cap);
         e.storage()
             .persistent()
-            .set(&Bytes::from_slice(e, TOTAL_SUPPLY_KEY.as_bytes()), &0i128);
+            .extend_ttl(&DataKey::Cap, MIN_TTL, TARGET_TTL);
         
-        // Owner is a minter by default
+        // Owner is a minter by default with TTL extension
         e.storage()
             .persistent()
             .set(&DataKey::MinterRole(owner.clone()), &true);
+        e.storage()
+            .persistent()
+            .extend_ttl(&DataKey::MinterRole(owner.clone()), MIN_TTL, TARGET_TTL);
+        
+        // Owner is automatically allowlisted for KYC/MiCA compliance with TTL extension
+        e.storage()
+            .persistent()
+            .set(&DataKey::AllowList(owner.clone()), &true);
+        e.storage()
+            .persistent()
+            .extend_ttl(&DataKey::AllowList(owner.clone()), MIN_TTL, TARGET_TTL);
+        
+        // Mark as initialized with TTL extension
+        e.storage()
+            .persistent()
+            .set(&DataKey::Initialized, &true);
+        e.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Initialized, MIN_TTL, TARGET_TTL);
     }
 
     /// Mint tokens to an address (only minter role)
     #[when_not_paused]
-    pub fn mint(e: &Env, to: Address, amount: i128) {
-        let caller = e.current_contract_address();
+    pub fn mint(e: &Env, caller: Address, to: Address, amount: i128) {
+        caller.require_auth();
         
         // Check minter role
         let is_minter: bool = e
@@ -89,130 +113,117 @@ impl TokenContract {
             panic!("Amount must be positive");
         }
         
-        // Get current total supply and cap
-        let total_supply: i128 = e
-            .storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, TOTAL_SUPPLY_KEY.as_bytes()))
-            .unwrap_or(0i128);
+        // AllowList enforcement for KYC/MiCA compliance
+        if !Self::is_allowlisted(e, to.clone()) {
+            panic!("Mint recipient not in allowlist");
+        }
         
+        // Check cap using OpenZeppelin's total supply with overflow protection
+        let total_supply = Base::total_supply(e);
         let cap: i128 = e
             .storage()
             .persistent()
-            .get(&Bytes::from_slice(e, CAP_KEY.as_bytes()))
+            .get(&DataKey::Cap)
             .unwrap_or_else(|| panic!("Cap not set"));
         
-        // Check cap
-        if total_supply + amount > cap {
+        let new_supply = total_supply.checked_add(amount)
+            .expect("Supply overflow");
+        if new_supply > cap {
             panic!("Minting would exceed cap");
         }
         
-        // Mint tokens by updating balance
-        let balance: i128 = e
-            .storage()
-            .persistent()
-            .get(&DataKey::Balance(to.clone()))
-            .unwrap_or(0i128);
-        e.storage()
-            .persistent()
-            .set(&DataKey::Balance(to.clone()), &(balance + amount));
+        // Use OpenZeppelin Base mint
+        Base::mint(e, &to, amount);
         
-        // Update total supply
-        e.storage()
-            .persistent()
-            .set(
-                &Bytes::from_slice(e, TOTAL_SUPPLY_KEY.as_bytes()),
-                &(total_supply + amount),
-            );
+        // Emit mint event
+        e.events().publish(
+            (Symbol::new(e, "mint"), to.clone()),
+            amount,
+        );
     }
 
-    /// Burn tokens from an address
-    #[when_not_paused]
-    pub fn burn(e: &Env, from: Address, amount: i128) {
-        from.require_auth();
-        
-        if amount <= 0 {
-            panic!("Amount must be positive");
-        }
-        
-        // Burn tokens by updating balance
-        let balance: i128 = e
-            .storage()
-            .persistent()
-            .get(&DataKey::Balance(from.clone()))
-            .unwrap_or(0i128);
-        if balance < amount {
-            panic!("Insufficient balance");
-        }
-        e.storage()
-            .persistent()
-            .set(&DataKey::Balance(from.clone()), &(balance - amount));
-        
-        // Update total supply
-        let total_supply: i128 = e
-            .storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, TOTAL_SUPPLY_KEY.as_bytes()))
-            .unwrap_or(0i128);
-        
-        e.storage()
-            .persistent()
-            .set(
-                &Bytes::from_slice(e, TOTAL_SUPPLY_KEY.as_bytes()),
-                &(total_supply - amount),
-            );
-    }
-
+    
     /// Set minter role for an address (owner only)
     #[only_owner]
     pub fn set_minter(e: &Env, _caller: Address, account: Address, enabled: bool) {
+        // Prevent revoking the owner's minter role (but allow revoking other minters)
+        if !enabled {
+            let owner = ownable::get_owner(e)
+                .expect("Owner not set");
+            
+            if account == owner {
+                panic!("Cannot revoke minter role from owner");
+            }
+        }
+        
         e.storage()
             .persistent()
             .set(&DataKey::MinterRole(account.clone()), &enabled);
+        e.storage()
+            .persistent()
+            .extend_ttl(&DataKey::MinterRole(account.clone()), MIN_TTL, TARGET_TTL);
+        
+        // Emit minter role change event
+        e.events().publish(
+            (Symbol::new(e, "minter_role"), account.clone()),
+            enabled,
+        );
     }
 
     /// Update the minting cap (owner only)
     #[only_owner]
     pub fn set_cap(e: &Env, _caller: Address, new_cap: i128) {
-        let total_supply: i128 = e
-            .storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, TOTAL_SUPPLY_KEY.as_bytes()))
-            .unwrap_or(0i128);
+        if new_cap <= 0 {
+            panic!("Cap must be positive");
+        }
         
-        if new_cap < total_supply {
-            panic!("New cap cannot be less than current total supply");
+        let total_supply = Base::total_supply(e);
+        
+        // Require cap > total_supply to allow future minting
+        if new_cap <= total_supply {
+            panic!("New cap must exceed current supply to allow future minting");
         }
         
         e.storage()
             .persistent()
-            .set(&Bytes::from_slice(e, CAP_KEY.as_bytes()), &new_cap);
-    }
-
-    /// Set whitelist status for KYC (owner only)
-    #[only_owner]
-    pub fn set_whitelist(e: &Env, _caller: Address, account: Address, whitelisted: bool) {
+            .set(&DataKey::Cap, &new_cap);
         e.storage()
             .persistent()
-            .set(&DataKey::Whitelist(account.clone()), &whitelisted);
+            .extend_ttl(&DataKey::Cap, MIN_TTL, TARGET_TTL);
+        
+        // Emit cap change event
+        e.events().publish(
+            (Symbol::new(e, "cap_change"),),
+            new_cap,
+        );
+    }
+
+    /// Set allowlist status for KYC (owner only)
+    #[only_owner]
+    pub fn set_allowlist(e: &Env, _caller: Address, account: Address, allowlisted: bool) {
+        e.storage()
+            .persistent()
+            .set(&DataKey::AllowList(account.clone()), &allowlisted);
+        e.storage()
+            .persistent()
+            .extend_ttl(&DataKey::AllowList(account.clone()), MIN_TTL, TARGET_TTL);
+        
+        // Emit allowlist change event
+        e.events().publish(
+            (Symbol::new(e, "allowlist"), account.clone()),
+            allowlisted,
+        );
     }
 
     /// Get the minting cap
     pub fn cap(e: &Env) -> i128 {
         e.storage()
             .persistent()
-            .get(&Bytes::from_slice(e, CAP_KEY.as_bytes()))
+            .get(&DataKey::Cap)
             .unwrap_or(0i128)
     }
 
-    /// Get total supply
-    pub fn total_supply(e: &Env) -> i128 {
-        e.storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, TOTAL_SUPPLY_KEY.as_bytes()))
-            .unwrap_or(0i128)
-    }
-
+    
     /// Check if an address has minter role
     pub fn is_minter(e: &Env, account: Address) -> bool {
         e.storage()
@@ -221,95 +232,15 @@ impl TokenContract {
             .unwrap_or(false)
     }
 
-    /// Check if an address is whitelisted
-    pub fn is_whitelisted(e: &Env, account: Address) -> bool {
+    /// Check if an address is allowlisted
+    pub fn is_allowlisted(e: &Env, account: Address) -> bool {
         e.storage()
             .persistent()
-            .get(&DataKey::Whitelist(account))
+            .get(&DataKey::AllowList(account))
             .unwrap_or(false)
     }
 }
 
-//
-// ─── Token Standard Functions ───────────────────────────────────────────────
-//
-#[contractimpl]
-impl TokenContract {
-    /// Transfer tokens from one address to another
-    #[when_not_paused]
-    pub fn transfer(e: &Env, from: Address, to: Address, amount: i128) {
-        from.require_auth();
-        
-        if amount <= 0 {
-            panic!("Amount must be positive");
-        }
-        
-        // Optional: Enforce whitelist on transfers
-        // Uncomment to require recipient to be whitelisted
-        // let whitelisted: bool = e
-        //     .storage()
-        //     .persistent()
-        //     .get(&DataKey::Whitelist(to.clone()))
-        //     .unwrap_or(false);
-        // if !whitelisted {
-        //     panic!("Recipient not whitelisted");
-        // }
-        
-        let from_balance: i128 = e
-            .storage()
-            .persistent()
-            .get(&DataKey::Balance(from.clone()))
-            .unwrap_or(0i128);
-        if from_balance < amount {
-            panic!("Insufficient balance");
-        }
-        
-        e.storage()
-            .persistent()
-            .set(&DataKey::Balance(from.clone()), &(from_balance - amount));
-        
-        let to_balance: i128 = e
-            .storage()
-            .persistent()
-            .get(&DataKey::Balance(to.clone()))
-            .unwrap_or(0i128);
-        e.storage()
-            .persistent()
-            .set(&DataKey::Balance(to.clone()), &(to_balance + amount));
-    }
-    
-    /// Get balance of an address
-    pub fn balance(e: &Env, id: Address) -> i128 {
-        e.storage()
-            .persistent()
-            .get(&DataKey::Balance(id))
-            .unwrap_or(0i128)
-    }
-    
-    /// Get token name
-    pub fn name(e: &Env) -> String {
-        e.storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, NAME_KEY.as_bytes()))
-            .unwrap()
-    }
-    
-    /// Get token symbol
-    pub fn symbol(e: &Env) -> String {
-        e.storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, SYMBOL_KEY.as_bytes()))
-            .unwrap()
-    }
-    
-    /// Get token decimals
-    pub fn decimals(e: &Env) -> u32 {
-        e.storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, DECIMALS_KEY.as_bytes()))
-            .unwrap()
-    }
-}
 
 //
 // ─── Pausable Implementation ─────────────────────────────────────────────────
@@ -337,6 +268,88 @@ impl Pausable for TokenContract {
 #[default_impl]
 #[contractimpl]
 impl Ownable for TokenContract {}
+
+//
+// ─── OpenZeppelin Token Implementation ─────────────────────────────────────────
+//
+#[contractimpl]
+impl FungibleToken for TokenContract {
+    type ContractType = Base;
+
+    fn total_supply(e: &Env) -> i128 {
+        Base::total_supply(e)
+    }
+
+    fn balance(e: &Env, id: Address) -> i128 {
+        Base::balance(e, &id)
+    }
+
+    fn allowance(e: &Env, owner: Address, spender: Address) -> i128 {
+        Base::allowance(e, &owner, &spender)
+    }
+
+    fn transfer(e: &Env, from: Address, to: Address, amount: i128) {
+        if pausable::paused(e) {
+            panic!("Contract is paused");
+        }
+        
+        // AllowList enforcement for KYC/MiCA compliance
+        if !Self::is_allowlisted(e, to.clone()) {
+            panic!("Recipient not in allowlist");
+        }
+        
+        Base::transfer(e, &from, &to, amount);
+    }
+
+    fn transfer_from(e: &Env, spender: Address, from: Address, to: Address, amount: i128) {
+        if pausable::paused(e) {
+            panic!("Contract is paused");
+        }
+        
+        // AllowList enforcement for KYC/MiCA compliance
+        if !Self::is_allowlisted(e, to.clone()) {
+            panic!("Recipient not in allowlist");
+        }
+        
+        Base::transfer_from(e, &spender, &from, &to, amount);
+    }
+
+    fn approve(e: &Env, owner: Address, spender: Address, amount: i128, expiration_ledger: u32) {
+        if pausable::paused(e) {
+            panic!("Contract is paused");
+        }
+        Base::approve(e, &owner, &spender, amount, expiration_ledger);
+    }
+
+    fn decimals(e: &Env) -> u32 {
+        Base::decimals(e)
+    }
+
+    fn name(e: &Env) -> String {
+        Base::name(e)
+    }
+
+    fn symbol(e: &Env) -> String {
+        Base::symbol(e)
+    }
+}
+
+#[contractimpl]
+impl FungibleBurnable for TokenContract {
+    fn burn(e: &Env, from: Address, amount: i128) {
+        if pausable::paused(e) {
+            panic!("Contract is paused");
+        }
+        Base::burn(e, &from, amount);
+    }
+
+    fn burn_from(e: &Env, spender: Address, from: Address, amount: i128) {
+        if pausable::paused(e) {
+            panic!("Contract is paused");
+        }
+        Base::burn_from(e, &spender, &from, amount);
+    }
+}
 
 //
 // ─── Upgradeable Implementation ──────────────────────────────────────────────
