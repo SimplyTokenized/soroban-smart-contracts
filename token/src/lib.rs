@@ -299,6 +299,12 @@ impl FungibleToken for TokenContract {
         }
         
         Base::transfer(e, &from, &to, amount);
+        
+        // Emit transfer event
+        e.events().publish(
+            (Symbol::new(e, "transfer"), from.clone(), to.clone()),
+            amount,
+        );
     }
 
     fn transfer_from(e: &Env, spender: Address, from: Address, to: Address, amount: i128) {
@@ -312,6 +318,12 @@ impl FungibleToken for TokenContract {
         }
         
         Base::transfer_from(e, &spender, &from, &to, amount);
+        
+        // Emit transfer_from event
+        e.events().publish(
+            (Symbol::new(e, "transfer_from"), spender.clone(), from.clone(), to.clone()),
+            amount,
+        );
     }
 
     fn approve(e: &Env, owner: Address, spender: Address, amount: i128, expiration_ledger: u32) {
@@ -341,6 +353,12 @@ impl FungibleBurnable for TokenContract {
             panic!("Contract is paused");
         }
         Base::burn(e, &from, amount);
+        
+        // Emit burn event
+        e.events().publish(
+            (Symbol::new(e, "burn"), from.clone()),
+            amount,
+        );
     }
 
     fn burn_from(e: &Env, spender: Address, from: Address, amount: i128) {
@@ -348,6 +366,12 @@ impl FungibleBurnable for TokenContract {
             panic!("Contract is paused");
         }
         Base::burn_from(e, &spender, &from, amount);
+        
+        // Emit burn_from event
+        e.events().publish(
+            (Symbol::new(e, "burn_from"), spender.clone(), from.clone()),
+            amount,
+        );
     }
 }
 
