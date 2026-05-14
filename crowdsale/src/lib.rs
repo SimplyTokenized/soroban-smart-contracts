@@ -128,6 +128,18 @@ impl CrowdsaleContract {
                 &Bytes::from_slice(e, MIN_CONTRIBUTION_KEY.as_bytes()),
                 &min_contribution,
             );
+
+        e.events().publish(
+            (Symbol::new(e, "sale_opened"),),
+            SaleConfig {
+                start_time,
+                end_time,
+                price_numerator,
+                price_denominator,
+                global_cap,
+                min_contribution,
+            },
+        );
     }
 
     /// Add or remove supported stablecoin asset (owner only)
@@ -136,6 +148,11 @@ impl CrowdsaleContract {
         e.storage()
             .persistent()
             .set(&DataKey::SupportedAsset(asset_contract.clone()), &enabled);
+
+        e.events().publish(
+            (Symbol::new(e, "asset_supported"), asset_contract.clone()),
+            enabled,
+        );
     }
 
     /// Set whitelist status for buyer (owner only)
@@ -144,6 +161,11 @@ impl CrowdsaleContract {
         e.storage()
             .persistent()
             .set(&DataKey::Whitelist(buyer.clone()), &whitelisted);
+
+        e.events().publish(
+            (Symbol::new(e, "whitelist_updated"), buyer.clone()),
+            whitelisted,
+        );
     }
 
     /// Set per-user contribution cap (owner only)
@@ -305,6 +327,15 @@ impl CrowdsaleContract {
                 &Bytes::from_slice(e, TOTAL_SOLD_KEY.as_bytes()),
                 &(total_sold + tokens),
             );
+
+        e.events().publish(
+            (
+                Symbol::new(e, "tokens_purchased"),
+                buyer.clone(),
+                asset_contract.clone(),
+            ),
+            (amount, tokens),
+        );
     }
 
     /// Finalize sale after end time (owner only)
@@ -320,7 +351,10 @@ impl CrowdsaleContract {
         if current_time < end_time {
             panic!("Sale not ended");
         }
-        
+
+        e.events()
+            .publish((Symbol::new(e, "sale_finalized"),), end_time);
+
         // Sale finalization logic can be added here
         // e.g., distribute remaining tokens, lock contract, etc.
     }
@@ -417,11 +451,19 @@ impl Pausable for CrowdsaleContract {
     #[only_owner]
     fn pause(e: &Env, _caller: Address) {
         pausable::pause(e);
+        e.events().publish(
+            (Symbol::new(e, "paused"),),
+            e.ledger().timestamp(),
+        );
     }
 
     #[only_owner]
     fn unpause(e: &Env, _caller: Address) {
         pausable::unpause(e);
+        e.events().publish(
+            (Symbol::new(e, "unpaused"),),
+            e.ledger().timestamp(),
+        );
     }
 }
 
