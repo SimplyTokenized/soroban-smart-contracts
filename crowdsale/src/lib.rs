@@ -305,12 +305,15 @@ impl CrowdsaleContract {
             .persistent()
             .get(&Bytes::from_slice(e, TOKEN_CONTRACT_KEY.as_bytes()))
             .unwrap();
+            
+        let crowdsale_contract = e.current_contract_address();
         
         // Call mint function on the token contract
+        
         e.invoke_contract::<()>(
             &token_contract,
             &Symbol::new(e, "mint"),
-            (buyer.clone(), tokens).into_val(e),
+            (crowdsale_contract, buyer.clone(), tokens).into_val(e),
         );
         
         // Update state
