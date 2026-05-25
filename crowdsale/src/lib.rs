@@ -176,6 +176,19 @@ impl CrowdsaleContract {
             .set(&DataKey::UserCap(buyer.clone()), &cap);
     }
 
+    /// Update treasury address (owner only)
+    #[only_owner]
+    pub fn update_treasury(e: &Env, _caller: Address, new_treasury: Address) {
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()), &new_treasury);
+
+        e.events().publish(
+            (Symbol::new(e, "treasury_updated"),),
+            new_treasury,
+        );
+    }
+
     /// Main buy function - purchase tokens with supported stablecoin
     #[when_not_paused]
     pub fn buy(e: &Env, buyer: Address, asset_contract: Address, amount: i128) {

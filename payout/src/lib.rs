@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Bytes, BytesN, Env};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Bytes, BytesN, Env, Symbol};
 use stellar_ownable::{self as ownable, Ownable};
 use stellar_ownable_macro::only_owner;
 use stellar_pausable::{self as pausable, Pausable};
@@ -50,6 +50,80 @@ pub enum DataKey {
     PayoutRequest(u64),
     ClaimUsed(u64),
     Approver(Address),
+}
+
+// Event structs
+#[derive(Clone)]
+#[contracttype]
+pub struct PayoutRequestedEvent {
+    pub payout_id: u64,
+    pub beneficiary: Address,
+    pub amount: i128,
+    pub method: PayoutMethod,
+    pub asset_contract: Address,
+    pub metadata_hash: BytesN<32>,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct PayoutApprovedEvent {
+    pub payout_id: u64,
+    pub approver: Address,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct PayoutExecutedEvent {
+    pub payout_id: u64,
+    pub method: PayoutMethod,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct PayoutCancelledEvent {
+    pub payout_id: u64,
+    pub caller: Address,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct ClaimRedeemedEvent {
+    pub payout_id: u64,
+    pub beneficiary: Address,
+    pub amount: i128,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct OffchainPaymentConfirmedEvent {
+    pub payout_id: u64,
+    pub approver: Address,
+    pub proof_hash: BytesN<32>,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct ApproverUpdatedEvent {
+    pub account: Address,
+    pub enabled: bool,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct TreasuryUpdatedEvent {
+    pub new_treasury: Address,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct ContractPausedEvent {
+    pub caller: Address,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct ContractUnpausedEvent {
+    pub caller: Address,
 }
 
 #[derive(Upgradeable)]
@@ -121,7 +195,7 @@ impl PayoutContract {
             status: PayoutStatus::Requested,
             created_at: e.ledger().timestamp(),
             asset_contract: asset_contract.clone(),
-            metadata_hash,
+            metadata_hash: metadata_hash.clone(),
         };
         
         e.storage()
@@ -134,6 +208,17 @@ impl PayoutContract {
                 &Bytes::from_slice(e, NEXT_PAYOUT_ID_KEY.as_bytes()),
                 &(payout_id + 1),
             );
+        
+        // Emit event
+        e.events()
+            .publish((Symbol::new(e, "payout_requested"), payout_id), PayoutRequestedEvent {
+                payout_id,
+                beneficiary: beneficiary.clone(),
+                amount,
+                method,
+                asset_contract: asset_contract.clone(),
+                metadata_hash,
+            });
         
         payout_id
     }
@@ -168,6 +253,15 @@ impl PayoutContract {
         e.storage()
             .persistent()
             .set(&DataKey::PayoutRequest(payout_id), &payout);
+        
+        // Emit event
+        e.events().publish(
+            (Symbol::new(e, "payout_approved"), payout_id),
+            PayoutApprovedEvent {
+                payout_id,
+                approver: approver.clone(),
+            },
+        );
     }
 
     /// Execute direct wallet payout (approver role required)
@@ -215,6 +309,15 @@ impl PayoutContract {
         e.storage()
             .persistent()
             .set(&DataKey::PayoutRequest(payout_id), &payout);
+        
+        // Emit event
+        e.events().publish(
+            (Symbol::new(e, "payout_executed"), payout_id),
+            PayoutExecutedEvent {
+                payout_id,
+                method: payout.method,
+            },
+        );
     }
 
     /// Confirm off-chain payment for bank transfer (approver role required)
@@ -256,6 +359,16 @@ impl PayoutContract {
         e.storage()
             .persistent()
             .set(&DataKey::PayoutRequest(payout_id), &payout);
+        
+        // Emit event
+        e.events().publish(
+            (Symbol::new(e, "offchain_payment_confirmed"), payout_id),
+            OffchainPaymentConfirmedEvent {
+                payout_id,
+                approver: approver.clone(),
+                proof_hash: _proof_hash,
+            },
+        );
     }
 
     /// Redeem a claim voucher
@@ -333,6 +446,16 @@ impl PayoutContract {
         e.storage()
             .persistent()
             .set(&DataKey::PayoutRequest(payout_id), &payout);
+        
+        // Emit event
+        e.events().publish(
+            (Symbol::new(e, "claim_redeemed"), payout_id),
+            ClaimRedeemedEvent {
+                payout_id,
+                beneficiary: beneficiary.clone(),
+                amount,
+            },
+        );
     }
 
     /// Cancel a payout request (owner or approver only)
@@ -367,6 +490,15 @@ impl PayoutContract {
         e.storage()
             .persistent()
             .set(&DataKey::PayoutRequest(payout_id), &payout);
+        
+        // Emit event
+        e.events().publish(
+            (Symbol::new(e, "payout_cancelled"), payout_id),
+            PayoutCancelledEvent {
+                payout_id,
+                caller: caller.clone(),
+            },
+        );
     }
 
     /// Set approver role (owner only)
@@ -375,6 +507,15 @@ impl PayoutContract {
         e.storage()
             .persistent()
             .set(&DataKey::Approver(account.clone()), &enabled);
+        
+        // Emit event
+        e.events().publish(
+            (Symbol::new(e, "approver_updated"), account.clone()),
+            ApproverUpdatedEvent {
+                account: account.clone(),
+                enabled,
+            },
+        );
     }
 
     /// Update treasury address (owner only)
@@ -383,6 +524,14 @@ impl PayoutContract {
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()), &new_treasury);
+        
+        // Emit event
+        e.events().publish(
+            (Symbol::new(e, "treasury_updated"),),
+            TreasuryUpdatedEvent {
+                new_treasury: new_treasury.clone(),
+            },
+        );
     }
 
     // ========== View Functions ==========
@@ -442,11 +591,27 @@ impl Pausable for PayoutContract {
     #[only_owner]
     fn pause(e: &Env, _caller: Address) {
         pausable::pause(e);
+        
+        // Emit event
+        e.events().publish(
+            (Symbol::new(e, "contract_paused"),),
+            ContractPausedEvent {
+                caller: _caller.clone(),
+            },
+        );
     }
 
     #[only_owner]
     fn unpause(e: &Env, _caller: Address) {
         pausable::unpause(e);
+        
+        // Emit event
+        e.events().publish(
+            (Symbol::new(e, "contract_unpaused"),),
+            ContractUnpausedEvent {
+                caller: _caller.clone(),
+            },
+        );
     }
 }
 

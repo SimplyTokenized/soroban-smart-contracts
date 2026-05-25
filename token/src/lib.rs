@@ -8,8 +8,8 @@ use stellar_pausable_macros::when_not_paused;
 use stellar_upgradeable::UpgradeableInternal;
 use stellar_upgradeable_macros::Upgradeable;
 use stellar_default_impl_macro::default_impl;
-use stellar_tokens::fungible::{FungibleToken, Base};
-use stellar_tokens::fungible::burnable::FungibleBurnable;
+use stellar_fungible::{FungibleToken, Base};
+use stellar_fungible::burnable::FungibleBurnable;
 
 // TTL constants for persistent storage (ledger-based)
 const MIN_TTL: u32 = 1_000_000;
