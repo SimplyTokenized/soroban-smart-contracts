@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(test)]
+extern crate std;
+
 use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Bytes, Env, IntoVal, Symbol};
 use stellar_ownable::{self as ownable, Ownable};
 use stellar_ownable_macro::only_owner;
@@ -27,6 +30,7 @@ pub enum DataKey {
     Whitelist(Address),
     UserAllocation(Address),
     UserCap(Address),
+    AssetRate(Address),
 }
 
 #[derive(Clone)]
@@ -38,6 +42,14 @@ pub struct SaleConfig {
     pub price_denominator: i128,
     pub global_cap: i128,
     pub min_contribution: i128,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct AssetRate {
+    pub rate_numerator: i128,
+    pub rate_denominator: i128,
+    pub decimals: u32,
 }
 
 #[derive(Upgradeable)]
@@ -155,6 +167,49 @@ impl CrowdsaleContract {
         );
     }
 
+    /// Set or update rate for a specific asset (owner only)
+    #[only_owner]
+    pub fn set_asset_rate(
+        e: &Env,
+        _caller: Address,
+        asset_contract: Address,
+        rate_numerator: i128,
+        rate_denominator: i128,
+        decimals: u32,
+    ) {
+        if rate_numerator <= 0 || rate_denominator <= 0 {
+            panic!("Invalid rate");
+        }
+
+        let rate = AssetRate {
+            rate_numerator,
+            rate_denominator,
+            decimals,
+        };
+
+        e.storage()
+            .persistent()
+            .set(&DataKey::AssetRate(asset_contract.clone()), &rate);
+
+        e.events().publish(
+            (Symbol::new(e, "asset_rate_set"), asset_contract.clone()),
+            rate,
+        );
+    }
+
+    /// Remove rate for a specific asset (owner only)
+    #[only_owner]
+    pub fn remove_asset_rate(e: &Env, _caller: Address, asset_contract: Address) {
+        e.storage()
+            .persistent()
+            .remove(&DataKey::AssetRate(asset_contract.clone()));
+
+        e.events().publish(
+            (Symbol::new(e, "asset_rate_removed"), asset_contract.clone()),
+            true,
+        );
+    }
+
     /// Set whitelist status for buyer (owner only)
     #[only_owner]
     pub fn set_whitelist(e: &Env, _caller: Address, buyer: Address, whitelisted: bool) {
@@ -249,20 +304,30 @@ impl CrowdsaleContract {
             panic!("Not whitelisted");
         }
         
-        // Calculate tokens to allocate
-        let price_num: i128 = e
+        // Calculate tokens to allocate using per-asset rate or fallback to global price
+        let tokens = if let Some(asset_rate) = e
             .storage()
             .persistent()
-            .get(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()))
-            .unwrap();
-        
-        let price_den: i128 = e
-            .storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
-            .unwrap();
-        
-        let tokens = (amount * price_num) / price_den;
+            .get::<DataKey, AssetRate>(&DataKey::AssetRate(asset_contract.clone()))
+        {
+            // Use per-asset rate
+            (amount * asset_rate.rate_numerator) / asset_rate.rate_denominator
+        } else {
+            // Fallback to global price
+            let price_num: i128 = e
+                .storage()
+                .persistent()
+                .get(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()))
+                .unwrap();
+
+            let price_den: i128 = e
+                .storage()
+                .persistent()
+                .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
+                .unwrap();
+
+            (amount * price_num) / price_den
+        };
         
         if tokens <= 0 {
             panic!("Invalid token amount");
@@ -452,6 +517,43 @@ impl CrowdsaleContract {
             .persistent()
             .get(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()))
             .unwrap()
+    }
+
+    /// Calculate tokens for a given payment amount using the asset's rate
+    pub fn calculate_tokens(e: &Env, asset_contract: Address, payment_amount: i128) -> i128 {
+        let rate: AssetRate = match e
+            .storage()
+            .persistent()
+            .get(&DataKey::AssetRate(asset_contract))
+        {
+            Some(r) => r,
+            None => return 0i128,
+        };
+
+        if payment_amount <= 0 {
+            return 0i128;
+        }
+
+        (payment_amount * rate.rate_numerator) / rate.rate_denominator
+    }
+
+    /// Get rate information for an asset
+    pub fn get_asset_rate(e: &Env, asset_contract: Address) -> AssetRate {
+        e.storage()
+            .persistent()
+            .get(&DataKey::AssetRate(asset_contract))
+            .unwrap_or(AssetRate {
+                rate_numerator: 0,
+                rate_denominator: 1,
+                decimals: 0,
+            })
+    }
+
+    /// Check if an asset has a rate configured
+    pub fn has_asset_rate(e: &Env, asset_contract: Address) -> bool {
+        e.storage()
+            .persistent()
+            .has(&DataKey::AssetRate(asset_contract))
     }
 }
 

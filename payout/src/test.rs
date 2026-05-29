@@ -359,3 +359,177 @@ fn test_paused_functionality() {
         &metadata_hash,
     );
 }
+
+#[test]
+fn test_whitelist_system() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_payout_contract(&e, &token);
+
+    let beneficiary = Address::generate(&e);
+
+    // Initially not whitelisted
+    assert_eq!(client.is_whitelisted(&beneficiary), false);
+    assert_eq!(client.require_whitelist(), false);
+
+    // Add to whitelist
+    client.add_to_whitelist(&admin, &beneficiary);
+    assert_eq!(client.is_whitelisted(&beneficiary), true);
+
+    // Remove from whitelist
+    client.remove_from_whitelist(&admin, &beneficiary);
+    assert_eq!(client.is_whitelisted(&beneficiary), false);
+
+    // Enable whitelist requirement
+    client.update_whitelist_requirement(&admin, &true);
+    assert_eq!(client.require_whitelist(), true);
+
+    // Disable whitelist requirement
+    client.update_whitelist_requirement(&admin, &false);
+    assert_eq!(client.require_whitelist(), false);
+}
+
+#[test]
+#[should_panic(expected = "Not whitelisted")]
+fn test_request_payout_with_whitelist_required() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_payout_contract(&e, &token);
+
+    let beneficiary = Address::generate(&e);
+    let amount = 1000i128;
+    let metadata_hash = BytesN::from_array(&e, &[0u8; 32]);
+
+    // Enable whitelist requirement
+    client.update_whitelist_requirement(&admin, &true);
+
+    // Try to request payout without being whitelisted (should panic)
+    client.request_payout(
+        &beneficiary,
+        &amount,
+        &PayoutMethod::DirectWallet,
+        &token.address,
+        &metadata_hash,
+    );
+}
+
+#[test]
+fn test_request_payout_with_whitelist_allowed() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_payout_contract(&e, &token);
+
+    let beneficiary = Address::generate(&e);
+    let amount = 1000i128;
+    let metadata_hash = BytesN::from_array(&e, &[0u8; 32]);
+
+    // Enable whitelist requirement and add beneficiary
+    client.update_whitelist_requirement(&admin, &true);
+    client.add_to_whitelist(&admin, &beneficiary);
+
+    // Should succeed now
+    let payout_id = client.request_payout(
+        &beneficiary,
+        &amount,
+        &PayoutMethod::DirectWallet,
+        &token.address,
+        &metadata_hash,
+    );
+
+    assert_eq!(payout_id, 1);
+}
+
+#[test]
+fn test_emergency_withdraw() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_payout_contract(&e, &token);
+
+    // Mint tokens to the treasury
+    let treasury = client.treasury();
+    token.mint(&treasury, &1000);
+
+    let recipient = Address::generate(&e);
+
+    // Emergency withdraw
+    client.emergency_withdraw(&admin, &token.address, &recipient, &500);
+
+    // Verify tokens were transferred
+    assert_eq!(token.balance(&treasury), 500);
+    assert_eq!(token.balance(&recipient), 500);
+}
+
+#[test]
+#[should_panic(expected = "Invalid amount")]
+fn test_emergency_withdraw_invalid_amount() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_payout_contract(&e, &token);
+
+    let recipient = Address::generate(&e);
+
+    // Try to withdraw zero amount (should panic)
+    client.emergency_withdraw(&admin, &token.address, &recipient, &0);
+}
+
+#[test]
+fn test_calculate_total_required_funding() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_payout_contract(&e, &token);
+
+    let beneficiary1 = Address::generate(&e);
+    let beneficiary2 = Address::generate(&e);
+    let metadata_hash = BytesN::from_array(&e, &[0u8; 32]);
+
+    // Request and approve two direct wallet payouts
+    let payout_id1 = client.request_payout(
+        &beneficiary1,
+        &1000,
+        &PayoutMethod::DirectWallet,
+        &token.address,
+        &metadata_hash,
+    );
+    client.approve_payout(&admin, &payout_id1);
+
+    let payout_id2 = client.request_payout(
+        &beneficiary2,
+        &500,
+        &PayoutMethod::DirectWallet,
+        &token.address,
+        &metadata_hash,
+    );
+    client.approve_payout(&admin, &payout_id2);
+
+    // Request and approve a bank transfer (should not be counted)
+    let payout_id3 = client.request_payout(
+        &beneficiary1,
+        &2000,
+        &PayoutMethod::BankTransfer,
+        &token.address,
+        &metadata_hash,
+    );
+    client.approve_payout(&admin, &payout_id3);
+
+    // Calculate required funding (should exclude bank transfer)
+    let required = client.calculate_total_required_funding();
+    assert_eq!(required, 1500); // 1000 + 500, excluding 2000 bank transfer
+}

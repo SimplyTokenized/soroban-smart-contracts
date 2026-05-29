@@ -13,6 +13,7 @@ use stellar_default_impl_macro::default_impl;
 const TOKEN_CONTRACT_KEY: &str = "token_contract";
 const TREASURY_KEY: &str = "treasury";
 const NEXT_PAYOUT_ID_KEY: &str = "next_payout_id";
+const REQUIRE_WHITELIST_KEY: &str = "require_whitelist";
 
 #[derive(Clone, Copy, PartialEq)]
 #[contracttype]
@@ -50,6 +51,7 @@ pub enum DataKey {
     PayoutRequest(u64),
     ClaimUsed(u64),
     Approver(Address),
+    Whitelist(Address),
 }
 
 // Event structs
@@ -126,6 +128,19 @@ pub struct ContractUnpausedEvent {
     pub caller: Address,
 }
 
+#[derive(Clone)]
+#[contracttype]
+pub struct WhitelistUpdatedEvent {
+    pub account: Address,
+    pub enabled: bool,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct WhitelistRequirementUpdatedEvent {
+    pub required: bool,
+}
+
 #[derive(Upgradeable)]
 #[contract]
 pub struct PayoutContract;
@@ -158,11 +173,16 @@ impl PayoutContract {
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, NEXT_PAYOUT_ID_KEY.as_bytes()), &1u64);
-        
+
         // Owner is approver by default
         e.storage()
             .persistent()
             .set(&DataKey::Approver(owner.clone()), &true);
+
+        // Whitelist requirement disabled by default
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()), &false);
     }
 
     /// Request a payout
@@ -176,7 +196,26 @@ impl PayoutContract {
         metadata_hash: BytesN<32>,
     ) -> u64 {
         beneficiary.require_auth();
-        
+
+        // Check whitelist if required
+        let require_whitelist: bool = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()))
+            .unwrap_or(false);
+
+        if require_whitelist {
+            let whitelisted: bool = e
+                .storage()
+                .persistent()
+                .get(&DataKey::Whitelist(beneficiary.clone()))
+                .unwrap_or(false);
+
+            if !whitelisted {
+                panic!("Not whitelisted");
+            }
+        }
+
         if amount <= 0 {
             panic!("Invalid amount");
         }
@@ -227,33 +266,33 @@ impl PayoutContract {
     #[when_not_paused]
     pub fn approve_payout(e: &Env, approver: Address, payout_id: u64) {
         approver.require_auth();
-        
+
         // Check approver role
         let is_approver: bool = e
             .storage()
             .persistent()
             .get(&DataKey::Approver(approver.clone()))
             .unwrap_or(false);
-        
+
         if !is_approver {
             panic!("Not an approver");
         }
-        
+
         let mut payout: PayoutRequest = e
             .storage()
             .persistent()
             .get(&DataKey::PayoutRequest(payout_id))
             .unwrap_or_else(|| panic!("Payout not found"));
-        
+
         if payout.status != PayoutStatus::Requested {
             panic!("Invalid status");
         }
-        
+
         payout.status = PayoutStatus::Approved;
         e.storage()
             .persistent()
             .set(&DataKey::PayoutRequest(payout_id), &payout);
-        
+
         // Emit event
         e.events().publish(
             (Symbol::new(e, "payout_approved"), payout_id),
@@ -383,6 +422,25 @@ impl PayoutContract {
         _signature: BytesN<64>,
     ) {
         beneficiary.require_auth();
+
+        // Check whitelist if required
+        let require_whitelist: bool = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()))
+            .unwrap_or(false);
+
+        if require_whitelist {
+            let whitelisted: bool = e
+                .storage()
+                .persistent()
+                .get(&DataKey::Whitelist(beneficiary.clone()))
+                .unwrap_or(false);
+
+            if !whitelisted {
+                panic!("Not whitelisted");
+            }
+        }
         
         // Check not already claimed
         let already_claimed: bool = e
@@ -524,13 +582,89 @@ impl PayoutContract {
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()), &new_treasury);
-        
+
         // Emit event
         e.events().publish(
             (Symbol::new(e, "treasury_updated"),),
             TreasuryUpdatedEvent {
                 new_treasury: new_treasury.clone(),
             },
+        );
+    }
+
+    /// Add address to whitelist (owner only)
+    #[only_owner]
+    pub fn add_to_whitelist(e: &Env, _caller: Address, account: Address) {
+        e.storage()
+            .persistent()
+            .set(&DataKey::Whitelist(account.clone()), &true);
+
+        // Emit event
+        e.events().publish(
+            (Symbol::new(e, "whitelist_updated"), account.clone()),
+            WhitelistUpdatedEvent {
+                account: account.clone(),
+                enabled: true,
+            },
+        );
+    }
+
+    /// Remove address from whitelist (owner only)
+    #[only_owner]
+    pub fn remove_from_whitelist(e: &Env, _caller: Address, account: Address) {
+        e.storage()
+            .persistent()
+            .set(&DataKey::Whitelist(account.clone()), &false);
+
+        // Emit event
+        e.events().publish(
+            (Symbol::new(e, "whitelist_updated"), account.clone()),
+            WhitelistUpdatedEvent {
+                account: account.clone(),
+                enabled: false,
+            },
+        );
+    }
+
+    /// Update whitelist requirement (owner only)
+    #[only_owner]
+    pub fn update_whitelist_requirement(e: &Env, _caller: Address, required: bool) {
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()), &required);
+
+        // Emit event
+        e.events().publish(
+            (Symbol::new(e, "whitelist_requirement_updated"),),
+            WhitelistRequirementUpdatedEvent { required },
+        );
+    }
+
+    /// Emergency withdrawal of tokens (owner only)
+    #[only_owner]
+    pub fn emergency_withdraw(
+        e: &Env,
+        _caller: Address,
+        asset_contract: Address,
+        to: Address,
+        amount: i128,
+    ) {
+        if amount <= 0 {
+            panic!("Invalid amount");
+        }
+
+        let treasury: Address = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()))
+            .unwrap();
+
+        let asset_client = token::Client::new(e, &asset_contract);
+        asset_client.transfer(&treasury, &to, &amount);
+
+        e.events().publish(
+            (Symbol::new(e, "emergency_withdraw"),),
+            (asset_contract, to, amount),
         );
     }
 
@@ -557,6 +691,20 @@ impl PayoutContract {
             .unwrap_or(false)
     }
 
+    pub fn is_whitelisted(e: &Env, account: Address) -> bool {
+        e.storage()
+            .persistent()
+            .get(&DataKey::Whitelist(account))
+            .unwrap_or(false)
+    }
+
+    pub fn require_whitelist(e: &Env) -> bool {
+        e.storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()))
+            .unwrap_or(false)
+    }
+
     pub fn next_payout_id(e: &Env) -> u64 {
         e.storage()
             .persistent()
@@ -576,6 +724,32 @@ impl PayoutContract {
             .persistent()
             .get(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()))
             .unwrap()
+    }
+
+    /// Calculate total required funding for pending payouts (excluding bank transfers)
+    pub fn calculate_total_required_funding(e: &Env) -> i128 {
+        let next_id: u64 = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, NEXT_PAYOUT_ID_KEY.as_bytes()))
+            .unwrap_or(1u64);
+
+        let mut total = 0i128;
+
+        for i in 1..next_id {
+            if let Some(payout) = e
+                .storage()
+                .persistent()
+                .get::<DataKey, PayoutRequest>(&DataKey::PayoutRequest(i))
+            {
+                // Only count approved payouts that are not bank transfers
+                if payout.status == PayoutStatus::Approved && payout.method != PayoutMethod::BankTransfer {
+                    total += payout.amount;
+                }
+            }
+        }
+
+        total
     }
 }
 

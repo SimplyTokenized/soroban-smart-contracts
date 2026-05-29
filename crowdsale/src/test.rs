@@ -199,6 +199,219 @@ fn test_finalize_sale() {
 }
 
 #[test]
+fn test_set_and_get_asset_rate() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_crowdsale_contract(&e, &token);
+
+    // Create a stablecoin
+    let stablecoin = create_token_contract(&e, &admin);
+
+    // Set asset rate
+    client.set_asset_rate(
+        &admin,
+        &stablecoin.address,
+        &2_000_000,  // 2 tokens per 1 stablecoin
+        &1_000_000,
+        &6,  // 6 decimals
+    );
+
+    // Verify rate was set
+    let rate = client.get_asset_rate(&stablecoin.address);
+    assert_eq!(rate.rate_numerator, 2_000_000);
+    assert_eq!(rate.rate_denominator, 1_000_000);
+    assert_eq!(rate.decimals, 6);
+
+    // Verify has_asset_rate
+    assert_eq!(client.has_asset_rate(&stablecoin.address), true);
+}
+
+#[test]
+fn test_calculate_tokens() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_crowdsale_contract(&e, &token);
+
+    // Create a stablecoin
+    let stablecoin = create_token_contract(&e, &admin);
+
+    // Set asset rate: 2 tokens per 1 stablecoin
+    client.set_asset_rate(
+        &admin,
+        &stablecoin.address,
+        &2_000_000,
+        &1_000_000,
+        &6,
+    );
+
+    // Calculate tokens for 50 stablecoins
+    let payment_amount = 50_000000;  // 50 stablecoins
+    let expected_tokens = 100_000000;  // 100 tokens
+    let calculated = client.calculate_tokens(&stablecoin.address, &payment_amount);
+    assert_eq!(calculated, expected_tokens);
+
+    // Test with zero amount
+    assert_eq!(client.calculate_tokens(&stablecoin.address, &0), 0);
+
+    // Test with asset that has no rate
+    let other_asset = create_token_contract(&e, &admin);
+    assert_eq!(client.calculate_tokens(&other_asset.address, &50_000000), 0);
+}
+
+#[test]
+fn test_buy_with_per_asset_rate() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_crowdsale_contract(&e, &token);
+
+    // Set up sale with global price (1:1)
+    let start_time = e.ledger().timestamp();
+    let end_time = start_time + 10000;
+    client.open_sale(
+        &admin,
+        &start_time,
+        &end_time,
+        &1_000_000,
+        &1_000_000,
+        &1_000_000_0000000,
+        &10_000000,
+    );
+
+    // Create a stablecoin with per-asset rate (2:1)
+    let stablecoin = create_token_contract(&e, &admin);
+    client.support_asset(&admin, &stablecoin.address, &true);
+    client.set_asset_rate(
+        &admin,
+        &stablecoin.address,
+        &2_000_000,  // 2 tokens per 1 stablecoin
+        &1_000_000,
+        &6,
+    );
+
+    // Whitelist a buyer
+    let buyer = Address::generate(&e);
+    client.set_whitelist(&admin, &buyer, &true);
+    client.set_user_cap(&admin, &buyer, &200_000000);
+
+    // Fund buyer with stablecoins
+    stablecoin.mint(&buyer, &1_000_000000);
+
+    // Buy tokens - should use per-asset rate (2:1)
+    let buy_amount = 50_000000;  // 50 stablecoins
+    client.buy(&buyer, &stablecoin.address, &buy_amount);
+
+    // Verify tokens were allocated using per-asset rate (should get 100 tokens)
+    let allocation = client.user_allocation(&buyer);
+    assert_eq!(allocation, 100_000000);
+}
+
+#[test]
+fn test_buy_fallback_to_global_price() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_crowdsale_contract(&e, &token);
+
+    // Set up sale with global price (1:1)
+    let start_time = e.ledger().timestamp();
+    let end_time = start_time + 10000;
+    client.open_sale(
+        &admin,
+        &start_time,
+        &end_time,
+        &1_000_000,
+        &1_000_000,
+        &1_000_000_0000000,
+        &10_000000,
+    );
+
+    // Create a stablecoin WITHOUT per-asset rate
+    let stablecoin = create_token_contract(&e, &admin);
+    client.support_asset(&admin, &stablecoin.address, &true);
+
+    // Whitelist a buyer
+    let buyer = Address::generate(&e);
+    client.set_whitelist(&admin, &buyer, &true);
+    client.set_user_cap(&admin, &buyer, &100_000000);
+
+    // Fund buyer with stablecoins
+    stablecoin.mint(&buyer, &1_000_000000);
+
+    // Buy tokens - should fall back to global price (1:1)
+    let buy_amount = 50_000000;  // 50 stablecoins
+    client.buy(&buyer, &stablecoin.address, &buy_amount);
+
+    // Verify tokens were allocated using global price (should get 50 tokens)
+    let allocation = client.user_allocation(&buyer);
+    assert_eq!(allocation, 50_000000);
+}
+
+#[test]
+fn test_remove_asset_rate() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_crowdsale_contract(&e, &token);
+
+    // Create a stablecoin
+    let stablecoin = create_token_contract(&e, &admin);
+
+    // Set asset rate
+    client.set_asset_rate(
+        &admin,
+        &stablecoin.address,
+        &2_000_000,
+        &1_000_000,
+        &6,
+    );
+
+    // Verify rate exists
+    assert_eq!(client.has_asset_rate(&stablecoin.address), true);
+
+    // Remove asset rate
+    client.remove_asset_rate(&admin, &stablecoin.address);
+
+    // Verify rate was removed
+    assert_eq!(client.has_asset_rate(&stablecoin.address), false);
+    assert_eq!(client.calculate_tokens(&stablecoin.address, &50_000000), 0);
+}
+
+#[test]
+#[should_panic(expected = "Invalid rate")]
+fn test_set_invalid_asset_rate() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_crowdsale_contract(&e, &token);
+
+    let stablecoin = create_token_contract(&e, &admin);
+
+    // Try to set invalid rate (zero numerator)
+    client.set_asset_rate(
+        &admin,
+        &stablecoin.address,
+        &0,
+        &1_000_000,
+        &6,
+    );
+}
+
+#[test]
 #[should_panic(expected = "not whitelisted")]
 fn test_buy_not_whitelisted() {
     let e = Env::default();
