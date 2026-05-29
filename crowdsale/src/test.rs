@@ -65,8 +65,8 @@ fn test_open_sale() {
     let price_num = 1_000_000; // 1 token = 1.0 of stablecoin
     let price_den = 1_000_000;
     let global_cap = 10_000_000_0000000; // 10M tokens
-    let min_contribution = 10_000000; // 10 stablecoins
-    
+    let min_tokens_received = 10_000000; // 10 tokens minimum
+
     // Open the sale
     client.open_sale(
         &admin,
@@ -75,9 +75,9 @@ fn test_open_sale() {
         &price_num,
         &price_den,
         &global_cap,
-        &min_contribution,
+        &min_tokens_received,
     );
-    
+
     // Verify sale configuration
     let config = client.get_sale_config();
     assert_eq!(config.start_time, start_time);
@@ -85,7 +85,7 @@ fn test_open_sale() {
     assert_eq!(config.price_numerator, price_num);
     assert_eq!(config.price_denominator, price_den);
     assert_eq!(config.global_cap, global_cap);
-    assert_eq!(config.min_contribution, min_contribution);
+    assert_eq!(config.min_tokens_received, min_tokens_received);
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn test_whitelist_and_buy() {
         &1_000_000,  // 1:1 price
         &1_000_000,
         &1_000_000_0000000,  // 1M tokens cap
-        &10_000000,  // 10 stablecoins min
+        &10_000000,  // 10 tokens min
     );
     
     // Create a stablecoin contract
@@ -156,7 +156,7 @@ fn test_buy_before_sale_starts() {
         &1_000_000,
         &1_000_000,
         &1_000_000_0000000,
-        &10_000000,
+        &10_000000,  // 10 tokens min
     );
     
     // Try to buy before sale starts (should panic)
@@ -184,7 +184,7 @@ fn test_finalize_sale() {
         &1_000_000,
         &1_000_000,
         &1_000_000_0000000,
-        &10_000000,
+        &10_000000,  // 10 tokens min
     );
     
     // Finalize the sale
@@ -283,7 +283,7 @@ fn test_buy_with_per_asset_rate() {
         &1_000_000,
         &1_000_000,
         &1_000_000_0000000,
-        &10_000000,
+        &10_000000,  // 10 tokens min
     );
 
     // Create a stablecoin with per-asset rate (2:1)
@@ -333,7 +333,7 @@ fn test_buy_fallback_to_global_price() {
         &1_000_000,
         &1_000_000,
         &1_000_000_0000000,
-        &10_000000,
+        &10_000000,  // 10 tokens min
     );
 
     // Create a stablecoin WITHOUT per-asset rate
@@ -430,7 +430,7 @@ fn test_buy_not_whitelisted() {
         &1_000_000,
         &1_000_000,
         &1_000_000_0000000,
-        &10_000000,
+        &10_000000,  // 10 tokens min
     );
     
     // Try to buy without being whitelisted (should panic)
@@ -460,6 +460,6 @@ fn test_pause_functionality() {
         &1_000_000,
         &1_000_000,
         &1_000_000_0000000,
-        &10_000000,
+        &10_000000,  // 10 tokens min
     );
 }

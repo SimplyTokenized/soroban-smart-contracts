@@ -21,7 +21,7 @@ const PRICE_NUM_KEY: &str = "price_num";
 const PRICE_DEN_KEY: &str = "price_den";
 const GLOBAL_CAP_KEY: &str = "global_cap";
 const TOTAL_SOLD_KEY: &str = "total_sold";
-const MIN_CONTRIBUTION_KEY: &str = "min_contribution";
+const MIN_TOKENS_KEY: &str = "min_tokens";
 
 #[derive(Clone)]
 #[contracttype]
@@ -41,7 +41,7 @@ pub struct SaleConfig {
     pub price_numerator: i128,
     pub price_denominator: i128,
     pub global_cap: i128,
-    pub min_contribution: i128,
+    pub min_tokens_received: i128,
 }
 
 #[derive(Clone)]
@@ -96,7 +96,7 @@ impl CrowdsaleContract {
         price_numerator: i128,
         price_denominator: i128,
         global_cap: i128,
-        min_contribution: i128,
+        min_tokens_received: i128,
     ) {
         if end_time <= start_time {
             panic!("Invalid time range");
@@ -137,8 +137,8 @@ impl CrowdsaleContract {
         e.storage()
             .persistent()
             .set(
-                &Bytes::from_slice(e, MIN_CONTRIBUTION_KEY.as_bytes()),
-                &min_contribution,
+                &Bytes::from_slice(e, MIN_TOKENS_KEY.as_bytes()),
+                &min_tokens_received,
             );
 
         e.events().publish(
@@ -149,7 +149,7 @@ impl CrowdsaleContract {
                 price_numerator,
                 price_denominator,
                 global_cap,
-                min_contribution,
+                min_tokens_received,
             },
         );
     }
@@ -270,18 +270,7 @@ impl CrowdsaleContract {
         if current_time >= end_time {
             panic!("Sale ended");
         }
-        
-        // Check minimum contribution
-        let min_contribution: i128 = e
-            .storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, MIN_CONTRIBUTION_KEY.as_bytes()))
-            .unwrap_or(0i128);
-        
-        if amount < min_contribution {
-            panic!("Below minimum contribution");
-        }
-        
+
         // Check asset is supported
         let asset_enabled: bool = e
             .storage()
@@ -332,7 +321,18 @@ impl CrowdsaleContract {
         if tokens <= 0 {
             panic!("Invalid token amount");
         }
-        
+
+        // Check minimum tokens received
+        let min_tokens: i128 = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, MIN_TOKENS_KEY.as_bytes()))
+            .unwrap_or(0i128);
+
+        if tokens < min_tokens {
+            panic!("Below minimum tokens");
+        }
+
         // Check user cap
         let user_cap: i128 = e
             .storage()
@@ -469,10 +469,10 @@ impl CrowdsaleContract {
                 .persistent()
                 .get(&Bytes::from_slice(e, GLOBAL_CAP_KEY.as_bytes()))
                 .unwrap_or(0i128),
-            min_contribution: e
+            min_tokens_received: e
                 .storage()
                 .persistent()
-                .get(&Bytes::from_slice(e, MIN_CONTRIBUTION_KEY.as_bytes()))
+                .get(&Bytes::from_slice(e, MIN_TOKENS_KEY.as_bytes()))
                 .unwrap_or(0i128),
         }
     }
