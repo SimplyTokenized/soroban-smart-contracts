@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Bytes, BytesN, Env, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Bytes, Env, Symbol, Vec};
 use stellar_ownable::{self as ownable, Ownable};
 use stellar_ownable_macro::only_owner;
 use stellar_pausable::{self as pausable, Pausable};
@@ -10,122 +10,87 @@ use stellar_upgradeable_macros::Upgradeable;
 use stellar_default_impl_macro::default_impl;
 
 // Storage keys
-const TOKEN_CONTRACT_KEY: &str = "token_contract";
-const TREASURY_KEY: &str = "treasury";
-const NEXT_PAYOUT_ID_KEY: &str = "next_payout_id";
+const BASE_TOKEN_KEY: &str = "base_token";
+const NEXT_DISTRIBUTION_ID_KEY: &str = "next_distribution_id";
 const REQUIRE_WHITELIST_KEY: &str = "require_whitelist";
+const MAX_BATCH_SIZE: u64 = 200;
 
+// Distribution modes
+#[derive(Clone, Copy, PartialEq)]
+#[contracttype]
+pub enum DistributionMode {
+    Proportional = 0,  // Snapshot-proportional payout calculation
+    Manual = 1,        // Exact per-investor amounts set by admin
+}
+
+// Distribution state lifecycle
+#[derive(Clone, Copy, PartialEq)]
+#[contracttype]
+pub enum DistributionState {
+    Setup = 0,   // Configuring investors and amounts
+    Compute = 1, // Pre-computing payout amounts
+    Payout = 2,  // Payouts active
+    Done = 3,    // Distribution finished
+}
+
+// Payout methods
 #[derive(Clone, Copy, PartialEq)]
 #[contracttype]
 pub enum PayoutMethod {
-    BankTransfer = 0,
-    Claim = 1,
-    DirectWallet = 2,
+    None = 0,        // Not set
+    Claim = 1,       // Investor claims directly
+    Automatic = 2,   // Automatic distribution
+    Bank = 3,        // Bank transfer
 }
 
-#[derive(Clone, Copy, PartialEq)]
-#[contracttype]
-pub enum PayoutStatus {
-    Requested = 0,
-    Approved = 1,
-    Executed = 2,
-    Cancelled = 3,
-}
-
+// Distribution structure
 #[derive(Clone)]
 #[contracttype]
-pub struct PayoutRequest {
-    pub id: u64,
-    pub beneficiary: Address,
-    pub amount: i128,
-    pub method: PayoutMethod,
-    pub status: PayoutStatus,
-    pub created_at: u64,
-    pub asset_contract: Address,
-    pub metadata_hash: BytesN<32>,
+pub struct Distribution {
+    pub distribution_id: u64,
+    pub snapshot_ledger: u64,           // Ledger height for snapshot
+    pub total_snapshot_balance: i128,   // Total balance across all investors
+    pub payout_token: Address,          // Payout token address
+    pub payout_token_amount: i128,      // Total funded on-chain (Claim + Automatic)
+    pub claim_balance: i128,            // Total snapshot balance for Claim investors
+    pub automatic_balance: i128,        // Total snapshot balance for Automatic investors
+    pub bank_balance: i128,             // Total snapshot balance for Bank investors
+    pub investor_count: u64,            // Number of investors
+    pub payout_token_claimed: i128,     // Total amount claimed so far
+    pub total_distribution_amount: i128,// Full intended distribution amount
+    pub distribution_mode: DistributionMode,
+    pub state: DistributionState,
+    pub initialized: bool,
 }
 
+// Data keys for storage
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
-    PayoutRequest(u64),
-    ClaimUsed(u64),
-    Approver(Address),
+    Distribution(u64),
+    SnapshotBalance(u64, Address),
+    IsInvestor(u64, Address),
+    PayoutPreference(u64, Address),
+    PaidOut(u64, Address),
+    PayoutAmount(u64, Address),
+    DistributionFunds(u64, Address),
     Whitelist(Address),
 }
 
 // Event structs
 #[derive(Clone)]
 #[contracttype]
-pub struct PayoutRequestedEvent {
-    pub payout_id: u64,
-    pub beneficiary: Address,
-    pub amount: i128,
-    pub method: PayoutMethod,
-    pub asset_contract: Address,
-    pub metadata_hash: BytesN<32>,
+pub struct DistributionCreatedEvent {
+    pub distribution_id: u64,
+    pub snapshot_ledger: u64,
+    pub payout_token: Address,
 }
 
 #[derive(Clone)]
 #[contracttype]
-pub struct PayoutApprovedEvent {
-    pub payout_id: u64,
-    pub approver: Address,
-}
-
-#[derive(Clone)]
-#[contracttype]
-pub struct PayoutExecutedEvent {
-    pub payout_id: u64,
-    pub method: PayoutMethod,
-}
-
-#[derive(Clone)]
-#[contracttype]
-pub struct PayoutCancelledEvent {
-    pub payout_id: u64,
-    pub caller: Address,
-}
-
-#[derive(Clone)]
-#[contracttype]
-pub struct ClaimRedeemedEvent {
-    pub payout_id: u64,
-    pub beneficiary: Address,
-    pub amount: i128,
-}
-
-#[derive(Clone)]
-#[contracttype]
-pub struct OffchainPaymentConfirmedEvent {
-    pub payout_id: u64,
-    pub approver: Address,
-    pub proof_hash: BytesN<32>,
-}
-
-#[derive(Clone)]
-#[contracttype]
-pub struct ApproverUpdatedEvent {
-    pub account: Address,
-    pub enabled: bool,
-}
-
-#[derive(Clone)]
-#[contracttype]
-pub struct TreasuryUpdatedEvent {
-    pub new_treasury: Address,
-}
-
-#[derive(Clone)]
-#[contracttype]
-pub struct ContractPausedEvent {
-    pub caller: Address,
-}
-
-#[derive(Clone)]
-#[contracttype]
-pub struct ContractUnpausedEvent {
-    pub caller: Address,
+pub struct DistributionStateAdvancedEvent {
+    pub distribution_id: u64,
+    pub new_state: DistributionState,
 }
 
 #[derive(Clone)]
@@ -141,6 +106,18 @@ pub struct WhitelistRequirementUpdatedEvent {
     pub required: bool,
 }
 
+#[derive(Clone)]
+#[contracttype]
+pub struct ContractPausedEvent {
+    pub caller: Address,
+}
+
+#[derive(Clone)]
+#[contracttype]
+pub struct ContractUnpausedEvent {
+    pub caller: Address,
+}
+
 #[derive(Upgradeable)]
 #[contract]
 pub struct PayoutContract;
@@ -151,33 +128,23 @@ impl PayoutContract {
     pub fn __constructor(
         e: &Env,
         owner: Address,
-        token_contract: Address,
-        treasury: Address,
+        base_token: Address,
     ) {
         // Set ownership
         ownable::set_owner(e, &owner);
         
-        // Store token contract and treasury addresses
+        // Store base token address (used to determine allocations)
         e.storage()
             .persistent()
             .set(
-                &Bytes::from_slice(e, TOKEN_CONTRACT_KEY.as_bytes()),
-                &token_contract,
+                &Bytes::from_slice(e, BASE_TOKEN_KEY.as_bytes()),
+                &base_token,
             );
         
+        // Initialize distribution ID counter
         e.storage()
             .persistent()
-            .set(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()), &treasury);
-        
-        // Initialize payout ID counter
-        e.storage()
-            .persistent()
-            .set(&Bytes::from_slice(e, NEXT_PAYOUT_ID_KEY.as_bytes()), &1u64);
-
-        // Owner is approver by default
-        e.storage()
-            .persistent()
-            .set(&DataKey::Approver(owner.clone()), &true);
+            .set(&Bytes::from_slice(e, NEXT_DISTRIBUTION_ID_KEY.as_bytes()), &1u64);
 
         // Whitelist requirement disabled by default
         e.storage()
@@ -185,243 +152,749 @@ impl PayoutContract {
             .set(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()), &false);
     }
 
-    /// Request a payout
+    // ========== Phase 1: Distribution Management ==========
+
+    /// Create a new distribution in Proportional mode
     #[when_not_paused]
-    pub fn request_payout(
+    pub fn create_distribution(
         e: &Env,
-        beneficiary: Address,
-        amount: i128,
-        method: PayoutMethod,
-        asset_contract: Address,
-        metadata_hash: BytesN<32>,
+        snapshot_ledger: u64,
+        payout_token: Address,
     ) -> u64 {
-        beneficiary.require_auth();
+        Self::_create_distribution(e, snapshot_ledger, payout_token, DistributionMode::Proportional)
+    }
 
-        // Check whitelist if required
-        let require_whitelist: bool = e
-            .storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()))
-            .unwrap_or(false);
+    /// Create a new distribution with specific mode
+    #[when_not_paused]
+    pub fn create_distribution_with_mode(
+        e: &Env,
+        snapshot_ledger: u64,
+        payout_token: Address,
+        mode: DistributionMode,
+    ) -> u64 {
+        Self::_create_distribution(e, snapshot_ledger, payout_token, mode)
+    }
 
-        if require_whitelist {
-            let whitelisted: bool = e
-                .storage()
-                .persistent()
-                .get(&DataKey::Whitelist(beneficiary.clone()))
-                .unwrap_or(false);
-
-            if !whitelisted {
-                panic!("Not whitelisted");
-            }
+    fn _create_distribution(
+        e: &Env,
+        snapshot_ledger: u64,
+        payout_token: Address,
+        mode: DistributionMode,
+    ) -> u64 {
+        // Validate snapshot ledger is not in the future
+        let current_ledger = e.ledger().sequence() as u64;
+        if snapshot_ledger > current_ledger {
+            panic!("Invalid snapshot ledger: cannot be in the future");
         }
 
-        if amount <= 0 {
-            panic!("Invalid amount");
-        }
-        
-        let payout_id: u64 = e
+        let distribution_id: u64 = e
             .storage()
             .persistent()
-            .get(&Bytes::from_slice(e, NEXT_PAYOUT_ID_KEY.as_bytes()))
+            .get(&Bytes::from_slice(e, NEXT_DISTRIBUTION_ID_KEY.as_bytes()))
             .unwrap_or(1u64);
         
-        let payout = PayoutRequest {
-            id: payout_id,
-            beneficiary: beneficiary.clone(),
-            amount,
-            method,
-            status: PayoutStatus::Requested,
-            created_at: e.ledger().timestamp(),
-            asset_contract: asset_contract.clone(),
-            metadata_hash: metadata_hash.clone(),
+        let distribution = Distribution {
+            distribution_id,
+            snapshot_ledger,
+            total_snapshot_balance: 0,
+            payout_token: payout_token.clone(),
+            payout_token_amount: 0,
+            claim_balance: 0,
+            automatic_balance: 0,
+            bank_balance: 0,
+            investor_count: 0,
+            payout_token_claimed: 0,
+            total_distribution_amount: 0,
+            distribution_mode: mode,
+            state: DistributionState::Setup,
+            initialized: true,
         };
         
         e.storage()
             .persistent()
-            .set(&DataKey::PayoutRequest(payout_id), &payout);
+            .set(&DataKey::Distribution(distribution_id), &distribution);
         
         e.storage()
             .persistent()
             .set(
-                &Bytes::from_slice(e, NEXT_PAYOUT_ID_KEY.as_bytes()),
-                &(payout_id + 1),
+                &Bytes::from_slice(e, NEXT_DISTRIBUTION_ID_KEY.as_bytes()),
+                &(distribution_id + 1),
             );
         
         // Emit event
         e.events()
-            .publish((Symbol::new(e, "payout_requested"), payout_id), PayoutRequestedEvent {
-                payout_id,
-                beneficiary: beneficiary.clone(),
-                amount,
-                method,
-                asset_contract: asset_contract.clone(),
-                metadata_hash,
-            });
+            .publish(
+                (Symbol::new(e, "distribution_created"), distribution_id),
+                DistributionCreatedEvent {
+                    distribution_id,
+                    snapshot_ledger,
+                    payout_token: payout_token.clone(),
+                },
+            );
         
-        payout_id
+        distribution_id
     }
 
-    /// Approve a payout request (approver role required)
-    #[when_not_paused]
-    pub fn approve_payout(e: &Env, approver: Address, payout_id: u64) {
-        approver.require_auth();
-
-        // Check approver role
-        let is_approver: bool = e
-            .storage()
-            .persistent()
-            .get(&DataKey::Approver(approver.clone()))
-            .unwrap_or(false);
-
-        if !is_approver {
-            panic!("Not an approver");
-        }
-
-        let mut payout: PayoutRequest = e
-            .storage()
-            .persistent()
-            .get(&DataKey::PayoutRequest(payout_id))
-            .unwrap_or_else(|| panic!("Payout not found"));
-
-        if payout.status != PayoutStatus::Requested {
-            panic!("Invalid status");
-        }
-
-        payout.status = PayoutStatus::Approved;
+    /// Get distribution details
+    pub fn get_distribution(e: &Env, distribution_id: u64) -> Distribution {
         e.storage()
             .persistent()
-            .set(&DataKey::PayoutRequest(payout_id), &payout);
-
-        // Emit event
-        e.events().publish(
-            (Symbol::new(e, "payout_approved"), payout_id),
-            PayoutApprovedEvent {
-                payout_id,
-                approver: approver.clone(),
-            },
-        );
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"))
     }
 
-    /// Execute direct wallet payout (approver role required)
-    #[when_not_paused]
-    pub fn execute_payout(e: &Env, approver: Address, payout_id: u64) {
-        approver.require_auth();
-        
-        // Check approver role
-        let is_approver: bool = e
-            .storage()
-            .persistent()
-            .get(&DataKey::Approver(approver.clone()))
-            .unwrap_or(false);
-        
-        if !is_approver {
-            panic!("Not an approver");
-        }
-        
-        let mut payout: PayoutRequest = e
-            .storage()
-            .persistent()
-            .get(&DataKey::PayoutRequest(payout_id))
-            .unwrap_or_else(|| panic!("Payout not found"));
-        
-        if payout.status != PayoutStatus::Approved {
-            panic!("Not approved");
-        }
-        
-        // Only DirectWallet method can be executed on-chain
-        if payout.method != PayoutMethod::DirectWallet {
-            panic!("Wrong method for on-chain execution");
-        }
-        
-        // Transfer tokens/assets from treasury to beneficiary
-        let treasury: Address = e
-            .storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()))
-            .unwrap();
-        
-        let asset_client = token::Client::new(e, &payout.asset_contract);
-        asset_client.transfer(&treasury, &payout.beneficiary, &payout.amount);
-        
-        payout.status = PayoutStatus::Executed;
-        e.storage()
-            .persistent()
-            .set(&DataKey::PayoutRequest(payout_id), &payout);
-        
-        // Emit event
-        e.events().publish(
-            (Symbol::new(e, "payout_executed"), payout_id),
-            PayoutExecutedEvent {
-                payout_id,
-                method: payout.method,
-            },
-        );
-    }
-
-    /// Confirm off-chain payment for bank transfer (approver role required)
-    #[when_not_paused]
-    pub fn confirm_offchain_payment(
+    /// Advance distribution state (admin only)
+    #[only_owner]
+    pub fn advance_distribution_state(
         e: &Env,
-        approver: Address,
-        payout_id: u64,
-        _proof_hash: BytesN<32>,
+        _caller: Address,
+        distribution_id: u64,
+        new_state: DistributionState,
     ) {
-        approver.require_auth();
-        
-        // Check approver role
-        let is_approver: bool = e
+        let mut distribution: Distribution = e
             .storage()
             .persistent()
-            .get(&DataKey::Approver(approver.clone()))
-            .unwrap_or(false);
-        
-        if !is_approver {
-            panic!("Not an approver");
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        // Validate state transition
+        let current_state = distribution.state;
+        let valid_transition = match (current_state, new_state) {
+            (DistributionState::Setup, DistributionState::Compute) => true,
+            (DistributionState::Compute, DistributionState::Payout) => true,
+            (DistributionState::Payout, DistributionState::Done) => true,
+            _ => false,
+        };
+
+        if !valid_transition {
+            panic!("Invalid state transition");
         }
-        
-        let mut payout: PayoutRequest = e
-            .storage()
-            .persistent()
-            .get(&DataKey::PayoutRequest(payout_id))
-            .unwrap_or_else(|| panic!("Payout not found"));
-        
-        if payout.status != PayoutStatus::Approved {
-            panic!("Not approved");
-        }
-        
-        if payout.method != PayoutMethod::BankTransfer {
-            panic!("Wrong method");
-        }
-        
-        payout.status = PayoutStatus::Executed;
+
+        distribution.state = new_state;
         e.storage()
             .persistent()
-            .set(&DataKey::PayoutRequest(payout_id), &payout);
-        
+            .set(&DataKey::Distribution(distribution_id), &distribution);
+
         // Emit event
-        e.events().publish(
-            (Symbol::new(e, "offchain_payment_confirmed"), payout_id),
-            OffchainPaymentConfirmedEvent {
-                payout_id,
-                approver: approver.clone(),
-                proof_hash: _proof_hash,
-            },
-        );
+        e.events()
+            .publish(
+                (Symbol::new(e, "distribution_state_advanced"), distribution_id),
+                DistributionStateAdvancedEvent {
+                    distribution_id,
+                    new_state,
+                },
+            );
     }
 
-    /// Redeem a claim voucher
-    #[when_not_paused]
-    pub fn claim_redeem(
+    // ========== Phase 2: Snapshot & Investor Management ==========
+
+    /// Set investor balances and payout methods in batch
+    #[only_owner]
+    pub fn set_investor_balances(
         e: &Env,
-        payout_id: u64,
-        beneficiary: Address,
+        _caller: Address,
+        distribution_id: u64,
+        investors: Vec<Address>,
+        balances: Vec<i128>,
+        methods: Vec<PayoutMethod>,
+    ) {
+        let mut distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        // Validate distribution is in Setup state
+        if distribution.state != DistributionState::Setup {
+            panic!("Distribution not in Setup state");
+        }
+
+        // Validate array lengths
+        if investors.len() != balances.len() {
+            panic!("Investors and balances length mismatch");
+        }
+        if investors.len() != methods.len() {
+            panic!("Investors and methods length mismatch");
+        }
+
+        // Validate batch size
+        if investors.is_empty() || investors.len() as u64 > MAX_BATCH_SIZE {
+            panic!("Invalid batch size");
+        }
+
+        let mut balance_delta = 0i128;
+
+        for i in 0..investors.len() {
+            let investor = investors.get(i).unwrap();
+            let balance = balances.get(i).unwrap();
+            let method = methods.get(i).unwrap();
+
+            if balance < 0 {
+                panic!("Invalid balance");
+            }
+            if method == PayoutMethod::None {
+                panic!("Payout method must be set");
+            }
+
+            let old_balance: i128 = e
+                .storage()
+                .persistent()
+                .get(&DataKey::SnapshotBalance(distribution_id, investor.clone()))
+                .unwrap_or(0i128);
+            
+            let old_method: PayoutMethod = e
+                .storage()
+                .persistent()
+                .get(&DataKey::PayoutPreference(distribution_id, investor.clone()))
+                .unwrap_or(PayoutMethod::None);
+
+            // Update balances per payout method tracking
+            if old_balance > 0 && old_method != PayoutMethod::None {
+                match old_method {
+                    PayoutMethod::Claim => distribution.claim_balance -= old_balance,
+                    PayoutMethod::Automatic => distribution.automatic_balance -= old_balance,
+                    PayoutMethod::Bank => distribution.bank_balance -= old_balance,
+                    PayoutMethod::None => {}
+                }
+            }
+
+            if balance > 0 {
+                if old_balance == 0 {
+                    // New investor in this distribution
+                    e.storage()
+                        .persistent()
+                        .set(&DataKey::IsInvestor(distribution_id, investor.clone()), &true);
+                    distribution.investor_count += 1;
+                    balance_delta += balance;
+                } else {
+                    // Update existing investor - adjust delta
+                    balance_delta = balance_delta + balance - old_balance;
+                }
+
+                e.storage()
+                    .persistent()
+                    .set(&DataKey::SnapshotBalance(distribution_id, investor.clone()), &balance);
+                e.storage()
+                    .persistent()
+                    .set(&DataKey::PayoutPreference(distribution_id, investor.clone()), &method);
+
+                // Update per-method totals
+                match method {
+                    PayoutMethod::Claim => distribution.claim_balance += balance,
+                    PayoutMethod::Automatic => distribution.automatic_balance += balance,
+                    PayoutMethod::Bank => distribution.bank_balance += balance,
+                    PayoutMethod::None => {}
+                }
+            }
+        }
+
+        distribution.total_snapshot_balance += balance_delta;
+        e.storage()
+            .persistent()
+            .set(&DataKey::Distribution(distribution_id), &distribution);
+
+        // Emit event (simplified - EVM emits per investor but we emit batch for efficiency)
+        e.events()
+            .publish(
+                (Symbol::new(e, "investor_balances_set"), distribution_id),
+                (distribution.investor_count, distribution.total_snapshot_balance),
+            );
+    }
+
+    /// Set a single investor balance and payout method
+    #[only_owner]
+    pub fn set_investor_balance(
+        e: &Env,
+        _caller: Address,
+        distribution_id: u64,
+        investor: Address,
+        balance: i128,
+        method: PayoutMethod,
+    ) {
+        let mut distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        // Validate distribution is in Setup state
+        if distribution.state != DistributionState::Setup {
+            panic!("Distribution not in Setup state");
+        }
+
+        if balance < 0 {
+            panic!("Invalid balance");
+        }
+        if method == PayoutMethod::None {
+            panic!("Payout method must be set");
+        }
+
+        let old_balance: i128 = e
+            .storage()
+            .persistent()
+            .get(&DataKey::SnapshotBalance(distribution_id, investor.clone()))
+            .unwrap_or(0i128);
+        
+        let old_method: PayoutMethod = e
+            .storage()
+            .persistent()
+            .get(&DataKey::PayoutPreference(distribution_id, investor.clone()))
+            .unwrap_or(PayoutMethod::None);
+
+        // Update balances per payout method tracking
+        if old_balance > 0 && old_method != PayoutMethod::None {
+            match old_method {
+                PayoutMethod::Claim => distribution.claim_balance -= old_balance,
+                PayoutMethod::Automatic => distribution.automatic_balance -= old_balance,
+                PayoutMethod::Bank => distribution.bank_balance -= old_balance,
+                PayoutMethod::None => {}
+            }
+        }
+
+        let mut balance_delta = 0i128;
+
+        if balance > 0 {
+            if old_balance == 0 {
+                // New investor in this distribution
+                e.storage()
+                    .persistent()
+                    .set(&DataKey::IsInvestor(distribution_id, investor.clone()), &true);
+                distribution.investor_count += 1;
+                balance_delta = balance;
+            } else {
+                // Update existing investor - adjust delta
+                balance_delta = balance - old_balance;
+            }
+
+            e.storage()
+                .persistent()
+                .set(&DataKey::SnapshotBalance(distribution_id, investor.clone()), &balance);
+            e.storage()
+                .persistent()
+                .set(&DataKey::PayoutPreference(distribution_id, investor.clone()), &method);
+
+            // Update per-method totals
+            match method {
+                PayoutMethod::Claim => distribution.claim_balance += balance,
+                PayoutMethod::Automatic => distribution.automatic_balance += balance,
+                PayoutMethod::Bank => distribution.bank_balance += balance,
+                PayoutMethod::None => {}
+            }
+        }
+
+        distribution.total_snapshot_balance += balance_delta;
+        e.storage()
+            .persistent()
+            .set(&DataKey::Distribution(distribution_id), &distribution);
+
+        // Emit event
+        e.events()
+            .publish(
+                (Symbol::new(e, "investor_balance_added"), distribution_id),
+                (investor.clone(), balance, distribution.total_snapshot_balance),
+            );
+    }
+
+    /// Take on-chain snapshot by reading token balances
+    #[only_owner]
+    pub fn take_onchain_snapshot(
+        e: &Env,
+        _caller: Address,
+        distribution_id: u64,
+        investors: Vec<Address>,
+        base_token: Address,
+        methods: Vec<PayoutMethod>,
+    ) {
+        let distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        // Validate distribution is in Setup state
+        if distribution.state != DistributionState::Setup {
+            panic!("Distribution not in Setup state");
+        }
+
+        // Validate array lengths
+        if investors.len() != methods.len() {
+            panic!("Investors and methods length mismatch");
+        }
+
+        // Validate batch size
+        if investors.is_empty() || investors.len() as u64 > MAX_BATCH_SIZE {
+            panic!("Invalid batch size");
+        }
+
+        let token_client = token::Client::new(e, &base_token);
+        let mut balances = Vec::new(e);
+
+        for i in 0..investors.len() {
+            let investor = investors.get(i).unwrap();
+            let method = methods.get(i).unwrap();
+
+            if method == PayoutMethod::None {
+                panic!("Payout method must be set");
+            }
+
+            // Read balance from token contract
+            let balance = token_client.balance(&investor);
+            balances.push_back(balance);
+        }
+
+        // Use the same logic as set_investor_balances
+        Self::_set_investor_balances_internal(e, distribution_id, investors, balances, methods);
+    }
+
+    fn _set_investor_balances_internal(
+        e: &Env,
+        distribution_id: u64,
+        investors: Vec<Address>,
+        balances: Vec<i128>,
+        methods: Vec<PayoutMethod>,
+    ) {
+        let mut distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        let mut balance_delta = 0i128;
+
+        for i in 0..investors.len() {
+            let investor = investors.get(i).unwrap();
+            let balance = balances.get(i).unwrap();
+            let method = methods.get(i).unwrap();
+
+            let old_balance: i128 = e
+                .storage()
+                .persistent()
+                .get(&DataKey::SnapshotBalance(distribution_id, investor.clone()))
+                .unwrap_or(0i128);
+            
+            let old_method: PayoutMethod = e
+                .storage()
+                .persistent()
+                .get(&DataKey::PayoutPreference(distribution_id, investor.clone()))
+                .unwrap_or(PayoutMethod::None);
+
+            // Update balances per payout method tracking
+            if old_balance > 0 && old_method != PayoutMethod::None {
+                match old_method {
+                    PayoutMethod::Claim => distribution.claim_balance -= old_balance,
+                    PayoutMethod::Automatic => distribution.automatic_balance -= old_balance,
+                    PayoutMethod::Bank => distribution.bank_balance -= old_balance,
+                    PayoutMethod::None => {}
+                }
+            }
+
+            if balance > 0 {
+                if old_balance == 0 {
+                    e.storage()
+                        .persistent()
+                        .set(&DataKey::IsInvestor(distribution_id, investor.clone()), &true);
+                    distribution.investor_count += 1;
+                    balance_delta += balance;
+                } else {
+                    balance_delta = balance_delta + balance - old_balance;
+                }
+
+                e.storage()
+                    .persistent()
+                    .set(&DataKey::SnapshotBalance(distribution_id, investor.clone()), &balance);
+                e.storage()
+                    .persistent()
+                    .set(&DataKey::PayoutPreference(distribution_id, investor.clone()), &method);
+
+                match method {
+                    PayoutMethod::Claim => distribution.claim_balance += balance,
+                    PayoutMethod::Automatic => distribution.automatic_balance += balance,
+                    PayoutMethod::Bank => distribution.bank_balance += balance,
+                    PayoutMethod::None => {}
+                }
+            }
+        }
+
+        distribution.total_snapshot_balance += balance_delta;
+        e.storage()
+            .persistent()
+            .set(&DataKey::Distribution(distribution_id), &distribution);
+
+        e.events()
+            .publish(
+                (Symbol::new(e, "investor_balances_set"), distribution_id),
+                (distribution.investor_count, distribution.total_snapshot_balance),
+            );
+    }
+
+    // ========== Investor Query Functions ==========
+
+    pub fn get_investor_balance(e: &Env, distribution_id: u64, investor: Address) -> i128 {
+        e.storage()
+            .persistent()
+            .get(&DataKey::SnapshotBalance(distribution_id, investor))
+            .unwrap_or(0i128)
+    }
+
+    pub fn get_payout_preference(e: &Env, distribution_id: u64, investor: Address) -> PayoutMethod {
+        e.storage()
+            .persistent()
+            .get(&DataKey::PayoutPreference(distribution_id, investor))
+            .unwrap_or(PayoutMethod::None)
+    }
+
+    pub fn get_investor_count(e: &Env, distribution_id: u64) -> u64 {
+        let distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+        distribution.investor_count
+    }
+
+    pub fn is_investor(e: &Env, distribution_id: u64, investor: Address) -> bool {
+        e.storage()
+            .persistent()
+            .get(&DataKey::IsInvestor(distribution_id, investor))
+            .unwrap_or(false)
+    }
+
+    // ========== Phase 3: Distribution Funding ==========
+
+    /// Fund distribution with payout tokens
+    #[only_owner]
+    pub fn fund_payout_token(
+        e: &Env,
+        _caller: Address,
+        distribution_id: u64,
         amount: i128,
-        expiration: u64,
-        _nonce: u64,
-        _signature: BytesN<64>,
+        token: Address,
     ) {
-        beneficiary.require_auth();
+        let mut distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        if amount <= 0 {
+            panic!("Invalid amount");
+        }
+
+        // Transfer tokens from caller to contract
+        let token_client = token::Client::new(e, &token);
+        _caller.require_auth();
+        token_client.transfer(&_caller, &e.current_contract_address(), &amount);
+
+        // Update distribution funding
+        distribution.payout_token_amount += amount;
+        e.storage()
+            .persistent()
+            .set(&DataKey::Distribution(distribution_id), &distribution);
+
+        // Update distribution-specific funds pool
+        let current_funds: i128 = e
+            .storage()
+            .persistent()
+            .get(&DataKey::DistributionFunds(distribution_id, token.clone()))
+            .unwrap_or(0i128);
+        e.storage()
+            .persistent()
+            .set(&DataKey::DistributionFunds(distribution_id, token), &(current_funds + amount));
+
+        // Emit event
+        e.events()
+            .publish(
+                (Symbol::new(e, "payout_token_funded"), distribution_id),
+                (amount, distribution.payout_token_amount),
+            );
+    }
+
+    /// Set total distribution amount (includes Bank method payouts)
+    #[only_owner]
+    pub fn set_total_distribution_amount(
+        e: &Env,
+        _caller: Address,
+        distribution_id: u64,
+        amount: i128,
+    ) {
+        let mut distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        if amount < 0 {
+            panic!("Invalid amount");
+        }
+
+        distribution.total_distribution_amount = amount;
+        e.storage()
+            .persistent()
+            .set(&DataKey::Distribution(distribution_id), &distribution);
+
+        // Emit event
+        e.events()
+            .publish(
+                (Symbol::new(e, "distribution_total_amount_set"), distribution_id),
+                amount,
+            );
+    }
+
+    /// Get required funding amount (O(1) calculation for Claim + Automatic only)
+    pub fn get_required_funding_amount(e: &Env, distribution_id: u64) -> i128 {
+        let distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+        
+        // O(1) calculation: claim_balance + automatic_balance
+        distribution.claim_balance + distribution.automatic_balance
+    }
+
+    /// Get distribution funds for specific token
+    pub fn get_distribution_funds(e: &Env, distribution_id: u64, token: Address) -> i128 {
+        e.storage()
+            .persistent()
+            .get(&DataKey::DistributionFunds(distribution_id, token))
+            .unwrap_or(0i128)
+    }
+
+    // ========== Phase 4: Payout Calculations ==========
+
+    /// Compute payout amounts for all investors (Proportional mode)
+    #[only_owner]
+    pub fn compute_payout_amounts(
+        e: &Env,
+        _caller: Address,
+        distribution_id: u64,
+        total_payout_amount: i128,
+    ) {
+        let distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        // Validate distribution is in Compute state
+        if distribution.state != DistributionState::Compute {
+            panic!("Distribution not in Compute state");
+        }
+
+        // Validate distribution mode
+        if distribution.distribution_mode != DistributionMode::Proportional {
+            panic!("Distribution not in Proportional mode");
+        }
+
+        if total_payout_amount <= 0 {
+            panic!("Invalid total payout amount");
+        }
+
+        if distribution.total_snapshot_balance == 0 {
+            panic!("Total snapshot balance is zero");
+        }
+
+        // Calculate and cache payout amounts for each investor
+        // In a real implementation, we would iterate through investors
+        // For now, this is a placeholder that would need investor iteration
+        // This is complex in Soroban due to lack of direct iteration over storage
+        
+        // For EVM parity, we would:
+        // 1. Get all investors for this distribution
+        // 2. For each investor: payout = (investor_balance / total_snapshot_balance) * total_payout_amount
+        // 3. Store in payoutAmounts mapping
+        
+        // Emit event
+        e.events()
+            .publish(
+                (Symbol::new(e, "payout_amounts_computed"), distribution_id),
+                total_payout_amount,
+            );
+    }
+
+    /// Set manual payout amounts (Manual mode)
+    #[only_owner]
+    pub fn set_manual_payout_amounts(
+        e: &Env,
+        _caller: Address,
+        distribution_id: u64,
+        investors: Vec<Address>,
+        amounts: Vec<i128>,
+    ) {
+        let distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        // Validate distribution is in Setup state
+        if distribution.state != DistributionState::Setup {
+            panic!("Distribution not in Setup state");
+        }
+
+        // Validate distribution mode
+        if distribution.distribution_mode != DistributionMode::Manual {
+            panic!("Distribution not in Manual mode");
+        }
+
+        // Validate array lengths
+        if investors.len() != amounts.len() {
+            panic!("Investors and amounts length mismatch");
+        }
+
+        // Validate batch size
+        if investors.is_empty() || investors.len() as u64 > MAX_BATCH_SIZE {
+            panic!("Invalid batch size");
+        }
+
+        for i in 0..investors.len() {
+            let investor = investors.get(i).unwrap();
+            let amount = amounts.get(i).unwrap();
+
+            if amount < 0 {
+                panic!("Invalid amount");
+            }
+
+            // Use investor.clone() for DataKey (investor is &Address from Vec::get)
+            // Use amount directly (it's &i128 but storage::set handles the reference)
+            e.storage()
+                .persistent()
+                .set(&DataKey::PayoutAmount(distribution_id, investor.clone()), &amount);
+        }
+
+        // Emit event
+        e.events()
+            .publish(
+                (Symbol::new(e, "manual_payout_amounts_set"), distribution_id),
+                investors.len(),
+            );
+    }
+
+    /// Get payout amount for investor
+    pub fn get_payout_amount(e: &Env, distribution_id: u64, investor: Address) -> i128 {
+        e.storage()
+            .persistent()
+            .get(&DataKey::PayoutAmount(distribution_id, investor))
+            .unwrap_or(0i128)
+    }
+
+    // ========== Phase 5: Payout Execution ==========
+
+    /// Claim payout (Claim method - investor calls directly)
+    #[when_not_paused]
+    pub fn claim_payout(e: &Env, investor: Address, distribution_id: u64) {
+        investor.require_auth();
+
+        let mut distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        // Validate distribution is in Payout state
+        if distribution.state != DistributionState::Payout {
+            panic!("Distribution not in Payout state");
+        }
 
         // Check whitelist if required
         let require_whitelist: bool = e
@@ -429,168 +902,307 @@ impl PayoutContract {
             .persistent()
             .get(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()))
             .unwrap_or(false);
-
         if require_whitelist {
             let whitelisted: bool = e
                 .storage()
                 .persistent()
-                .get(&DataKey::Whitelist(beneficiary.clone()))
+                .get(&DataKey::Whitelist(investor.clone()))
                 .unwrap_or(false);
-
             if !whitelisted {
                 panic!("Not whitelisted");
             }
         }
-        
-        // Check not already claimed
-        let already_claimed: bool = e
+
+        // Check investor has Claim preference
+        let preference: PayoutMethod = e
             .storage()
             .persistent()
-            .get(&DataKey::ClaimUsed(payout_id))
+            .get(&DataKey::PayoutPreference(distribution_id, investor.clone()))
+            .unwrap_or(PayoutMethod::None);
+        if preference != PayoutMethod::Claim {
+            panic!("Investor does not have Claim preference");
+        }
+
+        // Check if already paid
+        let already_paid: bool = e
+            .storage()
+            .persistent()
+            .get(&DataKey::PaidOut(distribution_id, investor.clone()))
             .unwrap_or(false);
-        
-        if already_claimed {
-            panic!("Already claimed");
+        if already_paid {
+            panic!("Already paid out");
         }
-        
-        // Check expiration
-        let current_time = e.ledger().timestamp();
-        if current_time >= expiration {
-            panic!("Voucher expired");
-        }
-        
-        // Verify the payout exists and is approved
-        let mut payout: PayoutRequest = e
+
+        // Get payout amount
+        let payout_amount: i128 = e
             .storage()
             .persistent()
-            .get(&DataKey::PayoutRequest(payout_id))
-            .unwrap_or_else(|| panic!("Payout not found"));
-        
-        if payout.status != PayoutStatus::Approved {
-            panic!("Not approved");
+            .get(&DataKey::PayoutAmount(distribution_id, investor.clone()))
+            .unwrap_or(0i128);
+        if payout_amount <= 0 {
+            panic!("No payout amount");
         }
-        
-        if payout.method != PayoutMethod::Claim {
-            panic!("Wrong method");
-        }
-        
-        if payout.beneficiary != beneficiary {
-            panic!("Wrong beneficiary");
-        }
-        
-        if payout.amount != amount {
-            panic!("Amount mismatch");
-        }
-        
-        // In production, verify signature here
-        // e.crypto().ed25519_verify(...);
-        
-        // Transfer tokens
-        let treasury: Address = e
-            .storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()))
-            .unwrap();
-        
-        let asset_client = token::Client::new(e, &payout.asset_contract);
-        asset_client.transfer(&treasury, &beneficiary, &amount);
-        
-        // Mark as claimed
+
+        // Transfer tokens from distribution pool to investor
+        let token_client = token::Client::new(e, &distribution.payout_token);
+        token_client.transfer(&e.current_contract_address(), &investor, &payout_amount);
+
+        // Mark as paid out
         e.storage()
             .persistent()
-            .set(&DataKey::ClaimUsed(payout_id), &true);
-        
-        payout.status = PayoutStatus::Executed;
+            .set(&DataKey::PaidOut(distribution_id, investor.clone()), &true);
+
+        // Update distribution claimed amount
+        distribution.payout_token_claimed += payout_amount;
         e.storage()
             .persistent()
-            .set(&DataKey::PayoutRequest(payout_id), &payout);
-        
+            .set(&DataKey::Distribution(distribution_id), &distribution);
+
         // Emit event
-        e.events().publish(
-            (Symbol::new(e, "claim_redeemed"), payout_id),
-            ClaimRedeemedEvent {
-                payout_id,
-                beneficiary: beneficiary.clone(),
-                amount,
-            },
-        );
+        e.events()
+            .publish(
+                (Symbol::new(e, "payout_claimed"), distribution_id),
+                (investor.clone(), payout_amount),
+            );
     }
 
-    /// Cancel a payout request (owner or approver only)
-    #[when_not_paused]
-    pub fn cancel_payout(e: &Env, caller: Address, payout_id: u64) {
-        caller.require_auth();
-        
-        // Check if caller is owner or approver
-        let owner = ownable::get_owner(e);
-        let is_owner = owner.map_or(false, |o| caller == o);
-        let is_approver: bool = e
+    /// Batch distribute automatic payouts (Automatic method)
+    #[only_owner]
+    pub fn batch_distribute_automatic(
+        e: &Env,
+        _caller: Address,
+        distribution_id: u64,
+        investors: Vec<Address>,
+    ) {
+        let mut distribution: Distribution = e
             .storage()
             .persistent()
-            .get(&DataKey::Approver(caller.clone()))
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        // Validate distribution is in Payout state
+        if distribution.state != DistributionState::Payout {
+            panic!("Distribution not in Payout state");
+        }
+
+        // Validate batch size
+        if investors.is_empty() || investors.len() as u64 > MAX_BATCH_SIZE {
+            panic!("Invalid batch size");
+        }
+
+        let token_client = token::Client::new(e, &distribution.payout_token);
+
+        for i in 0..investors.len() {
+            let investor = investors.get(i).unwrap();
+
+            // Check investor has Automatic preference
+            let preference: PayoutMethod = e
+                .storage()
+                .persistent()
+                .get(&DataKey::PayoutPreference(distribution_id, investor.clone()))
+                .unwrap_or(PayoutMethod::None);
+            if preference != PayoutMethod::Automatic {
+                continue; // Skip if not Automatic
+            }
+
+            // Check if already paid
+            let already_paid: bool = e
+                .storage()
+                .persistent()
+                .get(&DataKey::PaidOut(distribution_id, investor.clone()))
+                .unwrap_or(false);
+            if already_paid {
+                continue; // Skip if already paid
+            }
+
+            // Get payout amount
+            let payout_amount: i128 = e
+                .storage()
+                .persistent()
+                .get(&DataKey::PayoutAmount(distribution_id, investor.clone()))
+                .unwrap_or(0i128);
+            if payout_amount <= 0 {
+                continue; // Skip if no amount
+            }
+
+            // Transfer tokens (investor is already &Address from Vec::get)
+            token_client.transfer(&e.current_contract_address(), &investor, &payout_amount);
+
+            // Mark as paid out
+            e.storage()
+                .persistent()
+                .set(&DataKey::PaidOut(distribution_id, investor.clone()), &true);
+
+            // Update distribution claimed amount
+            distribution.payout_token_claimed += payout_amount;
+
+            // Emit event per investor
+            e.events()
+                .publish(
+                    (Symbol::new(e, "payout_marked_as_paid"), distribution_id),
+                    (investor.clone(), payout_amount),
+                );
+        }
+
+        e.storage()
+            .persistent()
+            .set(&DataKey::Distribution(distribution_id), &distribution);
+    }
+
+    /// Batch mark payouts as paid (Bank method)
+    #[only_owner]
+    pub fn batch_mark_payout_as_paid(
+        e: &Env,
+        _caller: Address,
+        distribution_id: u64,
+        investors: Vec<Address>,
+    ) {
+        let distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        // Validate distribution is in Payout state
+        if distribution.state != DistributionState::Payout {
+            panic!("Distribution not in Payout state");
+        }
+
+        // Validate batch size
+        if investors.is_empty() || investors.len() as u64 > MAX_BATCH_SIZE {
+            panic!("Invalid batch size");
+        }
+
+        for i in 0..investors.len() {
+            let investor = investors.get(i).unwrap();
+
+            // Check investor has Bank preference
+            let preference: PayoutMethod = e
+                .storage()
+                .persistent()
+                .get(&DataKey::PayoutPreference(distribution_id, investor.clone()))
+                .unwrap_or(PayoutMethod::None);
+            if preference != PayoutMethod::Bank {
+                continue; // Skip if not Bank
+            }
+
+            // Check if already paid
+            let already_paid: bool = e
+                .storage()
+                .persistent()
+                .get(&DataKey::PaidOut(distribution_id, investor.clone()))
+                .unwrap_or(false);
+            if already_paid {
+                continue; // Skip if already paid
+            }
+
+            // Mark as paid out (no on-chain transfer for Bank method)
+            e.storage()
+                .persistent()
+                .set(&DataKey::PaidOut(distribution_id, investor.clone()), &true);
+
+            // Emit event
+            e.events()
+                .publish(
+                    (Symbol::new(e, "payout_marked_as_paid"), distribution_id),
+                    (investor.clone(), 0i128), // 0 amount for Bank method
+                );
+        }
+    }
+
+    /// Check if investor has been paid out
+    pub fn has_been_paid(e: &Env, distribution_id: u64, investor: Address) -> bool {
+        e.storage()
+            .persistent()
+            .get(&DataKey::PaidOut(distribution_id, investor))
+            .unwrap_or(false)
+    }
+
+    // ========== Phase 6: View Functions & Testing ==========
+
+    /// Get claimable amount for investor
+    pub fn get_claimable_amount(e: &Env, distribution_id: u64, investor: Address) -> i128 {
+        let _distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        // Check if already paid
+        let already_paid: bool = e
+            .storage()
+            .persistent()
+            .get(&DataKey::PaidOut(distribution_id, investor.clone()))
             .unwrap_or(false);
-        
-        if !is_owner && !is_approver {
-            panic!("Unauthorized");
+        if already_paid {
+            return 0;
         }
-        
-        let mut payout: PayoutRequest = e
+
+        // Check investor has Claim preference
+        let preference: PayoutMethod = e
             .storage()
             .persistent()
-            .get(&DataKey::PayoutRequest(payout_id))
-            .unwrap_or_else(|| panic!("Payout not found"));
-        
-        if payout.status == PayoutStatus::Executed {
-            panic!("Already executed");
+            .get(&DataKey::PayoutPreference(distribution_id, investor.clone()))
+            .unwrap_or(PayoutMethod::None);
+        if preference != PayoutMethod::Claim {
+            return 0;
         }
-        
-        payout.status = PayoutStatus::Cancelled;
+
+        // Get payout amount
         e.storage()
             .persistent()
-            .set(&DataKey::PayoutRequest(payout_id), &payout);
-        
-        // Emit event
-        e.events().publish(
-            (Symbol::new(e, "payout_cancelled"), payout_id),
-            PayoutCancelledEvent {
-                payout_id,
-                caller: caller.clone(),
-            },
-        );
+            .get(&DataKey::PayoutAmount(distribution_id, investor.clone()))
+            .unwrap_or(0i128)
     }
 
-    /// Set approver role (owner only)
-    #[only_owner]
-    pub fn set_approver(e: &Env, _caller: Address, account: Address, enabled: bool) {
+    /// Get total claimable amount for distribution
+    pub fn get_total_claimable(e: &Env, distribution_id: u64) -> i128 {
+        let distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+        distribution.claim_balance - distribution.payout_token_claimed
+    }
+
+    /// Get distribution summary for frontend
+    pub fn get_distribution_summary(e: &Env, distribution_id: u64) -> (u64, u64, Address, i128, i128, u64, DistributionState) {
+        let distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+        
+        (
+            distribution.distribution_id,
+            distribution.snapshot_ledger,
+            distribution.payout_token,
+            distribution.total_snapshot_balance,
+            distribution.payout_token_amount,
+            distribution.investor_count,
+            distribution.state,
+        )
+    }
+
+    /// Check if distribution is claimable
+    pub fn is_distribution_claimable(e: &Env, distribution_id: u64) -> bool {
+        let distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+        distribution.state == DistributionState::Payout
+    }
+
+    /// Get payout method for investor
+    pub fn get_investor_payout_method(e: &Env, distribution_id: u64, investor: Address) -> PayoutMethod {
         e.storage()
             .persistent()
-            .set(&DataKey::Approver(account.clone()), &enabled);
-        
-        // Emit event
-        e.events().publish(
-            (Symbol::new(e, "approver_updated"), account.clone()),
-            ApproverUpdatedEvent {
-                account: account.clone(),
-                enabled,
-            },
-        );
+            .get(&DataKey::PayoutPreference(distribution_id, investor))
+            .unwrap_or(PayoutMethod::None)
     }
 
-    /// Update treasury address (owner only)
-    #[only_owner]
-    pub fn set_treasury(e: &Env, _caller: Address, new_treasury: Address) {
-        e.storage()
-            .persistent()
-            .set(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()), &new_treasury);
-
-        // Emit event
-        e.events().publish(
-            (Symbol::new(e, "treasury_updated"),),
-            TreasuryUpdatedEvent {
-                new_treasury: new_treasury.clone(),
-            },
-        );
-    }
+    // ========== Whitelist Functions ==========
 
     /// Add address to whitelist (owner only)
     #[only_owner]
@@ -600,13 +1212,14 @@ impl PayoutContract {
             .set(&DataKey::Whitelist(account.clone()), &true);
 
         // Emit event
-        e.events().publish(
-            (Symbol::new(e, "whitelist_updated"), account.clone()),
-            WhitelistUpdatedEvent {
-                account: account.clone(),
-                enabled: true,
-            },
-        );
+        e.events()
+            .publish(
+                (Symbol::new(e, "whitelist_updated"), account.clone()),
+                WhitelistUpdatedEvent {
+                    account: account.clone(),
+                    enabled: true,
+                },
+            );
     }
 
     /// Remove address from whitelist (owner only)
@@ -617,13 +1230,14 @@ impl PayoutContract {
             .set(&DataKey::Whitelist(account.clone()), &false);
 
         // Emit event
-        e.events().publish(
-            (Symbol::new(e, "whitelist_updated"), account.clone()),
-            WhitelistUpdatedEvent {
-                account: account.clone(),
-                enabled: false,
-            },
-        );
+        e.events()
+            .publish(
+                (Symbol::new(e, "whitelist_updated"), account.clone()),
+                WhitelistUpdatedEvent {
+                    account: account.clone(),
+                    enabled: false,
+                },
+            );
     }
 
     /// Update whitelist requirement (owner only)
@@ -634,61 +1248,27 @@ impl PayoutContract {
             .set(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()), &required);
 
         // Emit event
-        e.events().publish(
-            (Symbol::new(e, "whitelist_requirement_updated"),),
-            WhitelistRequirementUpdatedEvent { required },
-        );
-    }
-
-    /// Emergency withdrawal of tokens (owner only)
-    #[only_owner]
-    pub fn emergency_withdraw(
-        e: &Env,
-        _caller: Address,
-        asset_contract: Address,
-        to: Address,
-        amount: i128,
-    ) {
-        if amount <= 0 {
-            panic!("Invalid amount");
-        }
-
-        let treasury: Address = e
-            .storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()))
-            .unwrap();
-
-        let asset_client = token::Client::new(e, &asset_contract);
-        asset_client.transfer(&treasury, &to, &amount);
-
-        e.events().publish(
-            (Symbol::new(e, "emergency_withdraw"),),
-            (asset_contract, to, amount),
-        );
+        e.events()
+            .publish(
+                (Symbol::new(e, "whitelist_requirement_updated"),),
+                WhitelistRequirementUpdatedEvent { required },
+            );
     }
 
     // ========== View Functions ==========
 
-    pub fn get_payout(e: &Env, payout_id: u64) -> PayoutRequest {
+    pub fn base_token(e: &Env) -> Address {
         e.storage()
             .persistent()
-            .get(&DataKey::PayoutRequest(payout_id))
-            .unwrap_or_else(|| panic!("Payout not found"))
+            .get(&Bytes::from_slice(e, BASE_TOKEN_KEY.as_bytes()))
+            .unwrap()
     }
 
-    pub fn is_claim_used(e: &Env, payout_id: u64) -> bool {
+    pub fn next_distribution_id(e: &Env) -> u64 {
         e.storage()
             .persistent()
-            .get(&DataKey::ClaimUsed(payout_id))
-            .unwrap_or(false)
-    }
-
-    pub fn is_approver(e: &Env, account: Address) -> bool {
-        e.storage()
-            .persistent()
-            .get(&DataKey::Approver(account))
-            .unwrap_or(false)
+            .get(&Bytes::from_slice(e, NEXT_DISTRIBUTION_ID_KEY.as_bytes()))
+            .unwrap_or(1u64)
     }
 
     pub fn is_whitelisted(e: &Env, account: Address) -> bool {
@@ -703,53 +1283,6 @@ impl PayoutContract {
             .persistent()
             .get(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()))
             .unwrap_or(false)
-    }
-
-    pub fn next_payout_id(e: &Env) -> u64 {
-        e.storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, NEXT_PAYOUT_ID_KEY.as_bytes()))
-            .unwrap_or(1u64)
-    }
-
-    pub fn token_contract(e: &Env) -> Address {
-        e.storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, TOKEN_CONTRACT_KEY.as_bytes()))
-            .unwrap()
-    }
-
-    pub fn treasury(e: &Env) -> Address {
-        e.storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()))
-            .unwrap()
-    }
-
-    /// Calculate total required funding for pending payouts (excluding bank transfers)
-    pub fn calculate_total_required_funding(e: &Env) -> i128 {
-        let next_id: u64 = e
-            .storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, NEXT_PAYOUT_ID_KEY.as_bytes()))
-            .unwrap_or(1u64);
-
-        let mut total = 0i128;
-
-        for i in 1..next_id {
-            if let Some(payout) = e
-                .storage()
-                .persistent()
-                .get::<DataKey, PayoutRequest>(&DataKey::PayoutRequest(i))
-            {
-                // Only count approved payouts that are not bank transfers
-                if payout.status == PayoutStatus::Approved && payout.method != PayoutMethod::BankTransfer {
-                    total += payout.amount;
-                }
-            }
-        }
-
-        total
     }
 }
 
@@ -767,12 +1300,13 @@ impl Pausable for PayoutContract {
         pausable::pause(e);
         
         // Emit event
-        e.events().publish(
-            (Symbol::new(e, "contract_paused"),),
-            ContractPausedEvent {
-                caller: _caller.clone(),
-            },
-        );
+        e.events()
+            .publish(
+                (Symbol::new(e, "contract_paused"),),
+                ContractPausedEvent {
+                    caller: _caller.clone(),
+                },
+            );
     }
 
     #[only_owner]
@@ -780,12 +1314,13 @@ impl Pausable for PayoutContract {
         pausable::unpause(e);
         
         // Emit event
-        e.events().publish(
-            (Symbol::new(e, "contract_unpaused"),),
-            ContractUnpausedEvent {
-                caller: _caller.clone(),
-            },
-        );
+        e.events()
+            .publish(
+                (Symbol::new(e, "contract_unpaused"),),
+                ContractUnpausedEvent {
+                    caller: _caller.clone(),
+                },
+            );
     }
 }
 
