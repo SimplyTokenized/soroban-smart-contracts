@@ -16,7 +16,7 @@ const REQUIRE_WHITELIST_KEY: &str = "require_whitelist";
 const MAX_BATCH_SIZE: u64 = 200;
 
 // Distribution modes
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 #[contracttype]
 pub enum DistributionMode {
     Proportional = 0,  // Snapshot-proportional payout calculation
@@ -24,7 +24,7 @@ pub enum DistributionMode {
 }
 
 // Distribution state lifecycle
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 #[contracttype]
 pub enum DistributionState {
     Setup = 0,   // Configuring investors and amounts
@@ -34,7 +34,7 @@ pub enum DistributionState {
 }
 
 // Payout methods
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 #[contracttype]
 pub enum PayoutMethod {
     None = 0,        // Not set
@@ -1421,3 +1421,6 @@ impl UpgradeableInternal for PayoutContract {
         ownable::enforce_owner_auth(e);
     }
 }
+
+#[cfg(test)]
+mod test;

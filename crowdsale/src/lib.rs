@@ -22,6 +22,7 @@ const PRICE_DEN_KEY: &str = "price_den";
 const GLOBAL_CAP_KEY: &str = "global_cap";
 const TOTAL_SOLD_KEY: &str = "total_sold";
 const MIN_TOKENS_KEY: &str = "min_tokens";
+const WHITELIST_REQUIRED_KEY: &str = "whitelist_required";
 
 #[derive(Clone)]
 #[contracttype]
@@ -58,8 +59,13 @@ pub struct CrowdsaleContract;
 
 #[contractimpl]
 impl CrowdsaleContract {
-    /// Initialize the crowdsale contract
-    pub fn __constructor(
+    /// Initialize the crowdsale contract (optional parameters for SDK compatibility)
+    pub fn __constructor(_e: &Env) {
+        // Don't set anything - will be initialized via initialize function
+    }
+
+    /// Initialize the crowdsale contract with actual parameters
+    pub fn initialize(
         e: &Env,
         owner: Address,
         token_contract: Address,
@@ -84,6 +90,11 @@ impl CrowdsaleContract {
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, TOTAL_SOLD_KEY.as_bytes()), &0i128);
+        
+        // Initialize whitelist_required to true (default behavior)
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), &true);
     }
 
     /// Configure sale parameters (owner only)
@@ -223,6 +234,19 @@ impl CrowdsaleContract {
         );
     }
 
+    /// Set whitelist requirement flag (owner only)
+    #[only_owner]
+    pub fn set_whitelist_required(e: &Env, _caller: Address, required: bool) {
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), &required);
+
+        e.events().publish(
+            (Symbol::new(e, "whitelist_required_updated"),),
+            required,
+        );
+    }
+
     /// Set per-user contribution cap (owner only)
     #[only_owner]
     pub fn set_user_cap(e: &Env, _caller: Address, buyer: Address, cap: i128) {
@@ -282,15 +306,23 @@ impl CrowdsaleContract {
             panic!("Asset not supported");
         }
         
-        // Check whitelist
-        let whitelisted: bool = e
+        // Check whitelist (only if required)
+        let whitelist_required: bool = e
             .storage()
             .persistent()
-            .get(&DataKey::Whitelist(buyer.clone()))
-            .unwrap_or(false);
+            .get(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()))
+            .unwrap_or(true);
         
-        if !whitelisted {
-            panic!("Not whitelisted");
+        if whitelist_required {
+            let whitelisted: bool = e
+                .storage()
+                .persistent()
+                .get(&DataKey::Whitelist(buyer.clone()))
+                .unwrap_or(false);
+            
+            if !whitelisted {
+                panic!("Not whitelisted");
+            }
         }
         
         // Calculate tokens to allocate using per-asset rate or fallback to global price
@@ -498,6 +530,13 @@ impl CrowdsaleContract {
             .unwrap_or(false)
     }
 
+    pub fn is_whitelist_required(e: &Env) -> bool {
+        e.storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()))
+            .unwrap_or(true)
+    }
+
     pub fn is_asset_supported(e: &Env, asset_contract: Address) -> bool {
         e.storage()
             .persistent()
@@ -600,3 +639,6 @@ impl UpgradeableInternal for CrowdsaleContract {
         ownable::enforce_owner_auth(e);
     }
 }
+
+#[cfg(test)]
+mod test;
