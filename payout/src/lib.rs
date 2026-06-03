@@ -74,6 +74,7 @@ pub enum DataKey {
     PaidOut(u64, Address),
     PayoutAmount(u64, Address),
     DistributionFunds(u64, Address),
+    InvestorList(u64),
     Whitelist(Address),
 }
 
@@ -270,6 +271,46 @@ impl PayoutContract {
             panic!("Invalid state transition");
         }
 
+        // Validate funding before transitioning to Payout state
+        if new_state == DistributionState::Payout {
+            let required_funding = distribution.claim_balance + distribution.automatic_balance;
+            if distribution.payout_token_amount < required_funding {
+                panic!("Insufficient funding for payout. Required: {}, Funded: {}", required_funding, distribution.payout_token_amount);
+            }
+        }
+
+        // Validate completion before transitioning to Done state
+        if new_state == DistributionState::Done {
+            let investor_list: Vec<Address> = e
+                .storage()
+                .persistent()
+                .get(&DataKey::InvestorList(distribution_id))
+                .unwrap_or(Vec::new(e));
+
+            for i in 0..investor_list.len() {
+                let investor = investor_list.get(i).unwrap();
+
+                // Get investor's payout amount
+                let payout_amount: i128 = e
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::PayoutAmount(distribution_id, investor.clone()))
+                    .unwrap_or(0i128);
+
+                if payout_amount > 0 {
+                    // Check if investor has been paid out
+                    let paid_out: bool = e
+                        .storage()
+                        .persistent()
+                        .get(&DataKey::PaidOut(distribution_id, investor.clone()))
+                        .unwrap_or(false);
+                    if !paid_out {
+                        panic!("Cannot complete distribution: investor has not been paid out");
+                    }
+                }
+            }
+        }
+
         distribution.state = new_state;
         e.storage()
             .persistent()
@@ -287,6 +328,14 @@ impl PayoutContract {
     }
 
     // ========== Phase 2: Snapshot & Investor Management ==========
+
+    /// Get investor list for distribution
+    pub fn get_investor_list(e: &Env, distribution_id: u64) -> Vec<Address> {
+        e.storage()
+            .persistent()
+            .get(&DataKey::InvestorList(distribution_id))
+            .unwrap_or(Vec::new(e))
+    }
 
     /// Set investor balances and payout methods in batch
     #[only_owner]
@@ -366,6 +415,17 @@ impl PayoutContract {
                         .set(&DataKey::IsInvestor(distribution_id, investor.clone()), &true);
                     distribution.investor_count += 1;
                     balance_delta += balance;
+
+                    // Add to investor list
+                    let mut investor_list: Vec<Address> = e
+                        .storage()
+                        .persistent()
+                        .get(&DataKey::InvestorList(distribution_id))
+                        .unwrap_or(Vec::new(e));
+                    investor_list.push_back(investor.clone());
+                    e.storage()
+                        .persistent()
+                        .set(&DataKey::InvestorList(distribution_id), &investor_list);
                 } else {
                     // Update existing investor - adjust delta
                     balance_delta = balance_delta + balance - old_balance;
@@ -794,16 +854,38 @@ impl PayoutContract {
             panic!("Total snapshot balance is zero");
         }
 
+        // Get investor list
+        let investor_list: Vec<Address> = e
+            .storage()
+            .persistent()
+            .get(&DataKey::InvestorList(distribution_id))
+            .unwrap_or(Vec::new(e));
+
         // Calculate and cache payout amounts for each investor
-        // In a real implementation, we would iterate through investors
-        // For now, this is a placeholder that would need investor iteration
-        // This is complex in Soroban due to lack of direct iteration over storage
-        
-        // For EVM parity, we would:
-        // 1. Get all investors for this distribution
-        // 2. For each investor: payout = (investor_balance / total_snapshot_balance) * total_payout_amount
-        // 3. Store in payoutAmounts mapping
-        
+        for i in 0..investor_list.len() {
+            let investor = investor_list.get(i).unwrap();
+
+            // Get investor's snapshot balance
+            let investor_balance: i128 = e
+                .storage()
+                .persistent()
+                .get(&DataKey::SnapshotBalance(distribution_id, investor.clone()))
+                .unwrap_or(0i128);
+
+            if investor_balance == 0 {
+                continue;
+            }
+
+            // Calculate proportional payout amount
+            // payout = (investor_balance / total_snapshot_balance) * total_payout_amount
+            let payout_amount = (investor_balance * total_payout_amount) / distribution.total_snapshot_balance;
+
+            // Store payout amount
+            e.storage()
+                .persistent()
+                .set(&DataKey::PayoutAmount(distribution_id, investor.clone()), &payout_amount);
+        }
+
         // Emit event
         e.events()
             .publish(
