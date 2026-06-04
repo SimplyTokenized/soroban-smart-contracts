@@ -14,13 +14,13 @@ use stellar_fungible::burnable::FungibleBurnable;
 // TTL constants for persistent storage (ledger-based)
 const MIN_TTL: u32 = 1_000_000;
 const TARGET_TTL: u32 = 1_500_000;
-const ALLOWLIST_REQUIRED_KEY: &str = "allowlist_required";
+const WHITELIST_REQUIRED_KEY: &str = "whitelist_required";
 
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
     MinterRole(Address),
-    AllowList(Address),
+    Whitelist(Address),
     Initialized,
     Cap,
 }
@@ -77,13 +77,13 @@ impl TokenContract {
             .persistent()
             .extend_ttl(&DataKey::MinterRole(owner.clone()), MIN_TTL, TARGET_TTL);
         
-        // Owner is automatically allowlisted for KYC/MiCA compliance with TTL extension
+        // Owner is automatically whitelisted for KYC/MiCA compliance with TTL extension
         e.storage()
             .persistent()
-            .set(&DataKey::AllowList(owner.clone()), &true);
+            .set(&DataKey::Whitelist(owner.clone()), &true);
         e.storage()
             .persistent()
-            .extend_ttl(&DataKey::AllowList(owner.clone()), MIN_TTL, TARGET_TTL);
+            .extend_ttl(&DataKey::Whitelist(owner.clone()), MIN_TTL, TARGET_TTL);
         
         // Mark as initialized with TTL extension
         e.storage()
@@ -93,10 +93,10 @@ impl TokenContract {
             .persistent()
             .extend_ttl(&DataKey::Initialized, MIN_TTL, TARGET_TTL);
         
-        // Allowlist requirement disabled by default (more flexible)
+        // Whitelist requirement disabled by default (more flexible)
         e.storage()
             .persistent()
-            .set(&Bytes::from_slice(e, ALLOWLIST_REQUIRED_KEY.as_bytes()), &false);
+            .set(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), &false);
     }
 
     /// Mint tokens to an address (only minter role)
@@ -119,11 +119,11 @@ impl TokenContract {
             panic!("Amount must be positive");
         }
         
-        // AllowList enforcement for KYC/MiCA compliance (only if required)
-        let allowlist_required: bool = Self::is_allowlist_required(e);
-        if allowlist_required {
-            if !Self::is_allowlisted(e, to.clone()) {
-                panic!("Mint recipient not in allowlist");
+        // Whitelist enforcement for KYC/MiCA compliance (only if required)
+        let whitelist_required: bool = Self::is_whitelist_required(e);
+        if whitelist_required {
+            if !Self::is_whitelisted(e, to.clone()) {
+                panic!("Mint recipient not in whitelist");
             }
         }
         
@@ -207,20 +207,20 @@ impl TokenContract {
         );
     }
 
-    /// Set allowlist status for KYC (owner only)
+    /// Set whitelist status for KYC (owner only)
     #[only_owner]
-    pub fn set_allowlist(e: &Env, _caller: Address, account: Address, allowlisted: bool) {
+    pub fn set_whitelist(e: &Env, _caller: Address, account: Address, whitelisted: bool) {
         e.storage()
             .persistent()
-            .set(&DataKey::AllowList(account.clone()), &allowlisted);
+            .set(&DataKey::Whitelist(account.clone()), &whitelisted);
         e.storage()
             .persistent()
-            .extend_ttl(&DataKey::AllowList(account.clone()), MIN_TTL, TARGET_TTL);
+            .extend_ttl(&DataKey::Whitelist(account.clone()), MIN_TTL, TARGET_TTL);
         
-        // Emit allowlist change event
+        // Emit whitelist change event
         e.events().publish(
-            (Symbol::new(e, "allowlist"), account.clone()),
-            allowlisted,
+            (Symbol::new(e, "whitelist"), account.clone()),
+            whitelisted,
         );
     }
 
@@ -241,33 +241,33 @@ impl TokenContract {
             .unwrap_or(false)
     }
 
-    /// Check if an address is allowlisted
-    pub fn is_allowlisted(e: &Env, account: Address) -> bool {
+    /// Check if an address is whitelisted
+    pub fn is_whitelisted(e: &Env, account: Address) -> bool {
         e.storage()
             .persistent()
-            .get(&DataKey::AllowList(account))
+            .get(&DataKey::Whitelist(account))
             .unwrap_or(false)
     }
 
-    /// Set allowlist requirement (owner only)
+    /// Set whitelist requirement (owner only)
     #[only_owner]
-    pub fn set_allowlist_required(e: &Env, _caller: Address, required: bool) {
+    pub fn set_whitelist_required(e: &Env, _caller: Address, required: bool) {
         e.storage()
             .persistent()
-            .set(&Bytes::from_slice(e, ALLOWLIST_REQUIRED_KEY.as_bytes()), &required);
+            .set(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), &required);
 
         // Emit event
         e.events().publish(
-            (Symbol::new(e, "allowlist_requirement_updated"),),
+            (Symbol::new(e, "whitelist_requirement_updated"),),
             required,
         );
     }
 
-    /// Check if allowlist is required
-    pub fn is_allowlist_required(e: &Env) -> bool {
+    /// Check if whitelist is required
+    pub fn is_whitelist_required(e: &Env) -> bool {
         e.storage()
             .persistent()
-            .get(&Bytes::from_slice(e, ALLOWLIST_REQUIRED_KEY.as_bytes()))
+            .get(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()))
             .unwrap_or(false)
     }
 }
@@ -324,11 +324,11 @@ impl FungibleToken for TokenContract {
             panic!("Contract is paused");
         }
         
-        // AllowList enforcement for KYC/MiCA compliance (only if required)
-        let allowlist_required: bool = Self::is_allowlist_required(e);
-        if allowlist_required {
-            if !Self::is_allowlisted(e, to.clone()) {
-                panic!("Recipient not in allowlist");
+        // Whitelist enforcement for KYC/MiCA compliance (only if required)
+        let whitelist_required: bool = Self::is_whitelist_required(e);
+        if whitelist_required {
+            if !Self::is_whitelisted(e, to.clone()) {
+                panic!("Recipient not in whitelist");
             }
         }
         
@@ -346,11 +346,11 @@ impl FungibleToken for TokenContract {
             panic!("Contract is paused");
         }
         
-        // AllowList enforcement for KYC/MiCA compliance (only if required)
-        let allowlist_required: bool = Self::is_allowlist_required(e);
-        if allowlist_required {
-            if !Self::is_allowlisted(e, to.clone()) {
-                panic!("Recipient not in allowlist");
+        // Whitelist enforcement for KYC/MiCA compliance (only if required)
+        let whitelist_required: bool = Self::is_whitelist_required(e);
+        if whitelist_required {
+            if !Self::is_whitelisted(e, to.clone()) {
+                panic!("Recipient not in whitelist");
             }
         }
         

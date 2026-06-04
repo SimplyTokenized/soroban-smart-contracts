@@ -153,15 +153,15 @@ fn test_whitelist() {
     let user = Address::generate(&e);
     
     // Initially not whitelisted
-    assert!(!client.is_allowlisted(&user));
+    assert!(!client.is_whitelisted(&user));
     
     // Whitelist the user
-    client.set_allowlist(&admin, &user, &true);
-    assert!(client.is_allowlisted(&user));
+    client.set_whitelist(&admin, &user, &true);
+    assert!(client.is_whitelisted(&user));
     
     // Remove from whitelist
-    client.set_allowlist(&admin, &user, &false);
-    assert!(!client.is_allowlisted(&user));
+    client.set_whitelist(&admin, &user, &false);
+    assert!(!client.is_whitelisted(&user));
 }
 
 #[test]
@@ -240,7 +240,7 @@ fn test_mint_exceeds_cap() {
 }
 
 #[test]
-fn test_set_allowlist_required() {
+fn test_set_whitelist_required() {
     let e = Env::default();
     e.mock_all_auths();
     
@@ -248,19 +248,19 @@ fn test_set_allowlist_required() {
     let client = create_token_contract(&e, &admin, "Test Token", "TEST", 7, 1_000_000_0000000);
     
     // Verify default is false
-    assert_eq!(client.is_allowlist_required(), false);
+    assert_eq!(client.is_whitelist_required(), false);
     
     // Set to true
-    client.set_allowlist_required(&admin, &true);
-    assert_eq!(client.is_allowlist_required(), true);
+    client.set_whitelist_required(&admin, &true);
+    assert_eq!(client.is_whitelist_required(), true);
     
     // Set back to false
-    client.set_allowlist_required(&admin, &false);
-    assert_eq!(client.is_allowlist_required(), false);
+    client.set_whitelist_required(&admin, &false);
+    assert_eq!(client.is_whitelist_required(), false);
 }
 
 #[test]
-fn test_transfer_without_allowlist_when_disabled() {
+fn test_transfer_without_whitelist_when_disabled() {
     let e = Env::default();
     e.mock_all_auths();
     
@@ -270,7 +270,7 @@ fn test_transfer_without_allowlist_when_disabled() {
     let alice = Address::generate(&e);
     let transfer_amount = 100_0000;
     
-    // Allowlist is disabled by default, so transfer should work even without whitelisting
+    // Whitelist is disabled by default, so transfer should work even without whitelisting
     client.transfer(&admin, &alice, &transfer_amount);
     
     // Verify balances
@@ -279,16 +279,16 @@ fn test_transfer_without_allowlist_when_disabled() {
 }
 
 #[test]
-#[should_panic(expected = "Recipient not in allowlist")]
-fn test_transfer_with_allowlist_required() {
+#[should_panic(expected = "Recipient not in whitelist")]
+fn test_transfer_with_whitelist_required() {
     let e = Env::default();
     e.mock_all_auths();
     
     let admin = Address::generate(&e);
     let client = create_token_contract(&e, &admin, "Test Token", "TEST", 7, 1_000_000_0000000);
     
-    // Enable allowlist requirement
-    client.set_allowlist_required(&admin, &true);
+    // Enable whitelist requirement
+    client.set_whitelist_required(&admin, &true);
     
     let alice = Address::generate(&e);
     let transfer_amount = 100_0000;
@@ -298,17 +298,17 @@ fn test_transfer_with_allowlist_required() {
 }
 
 #[test]
-fn test_transfer_with_allowlist_when_whitelisted() {
+fn test_transfer_with_whitelist_when_whitelisted() {
     let e = Env::default();
     e.mock_all_auths();
     
     let admin = Address::generate(&e);
     let client = create_token_contract(&e, &admin, "Test Token", "TEST", 7, 1_000_000_0000000);
     
-    // Enable allowlist requirement and whitelist the user
-    client.set_allowlist_required(&admin, &true);
+    // Enable whitelist requirement and whitelist the user
+    client.set_whitelist_required(&admin, &true);
     let alice = Address::generate(&e);
-    client.set_allowlist(&admin, &alice, &true);
+    client.set_whitelist(&admin, &alice, &true);
     
     let transfer_amount = 100_0000;
     
@@ -321,16 +321,16 @@ fn test_transfer_with_allowlist_when_whitelisted() {
 }
 
 #[test]
-#[should_panic(expected = "Mint recipient not in allowlist")]
-fn test_mint_with_allowlist_required() {
+#[should_panic(expected = "Mint recipient not in whitelist")]
+fn test_mint_with_whitelist_required() {
     let e = Env::default();
     e.mock_all_auths();
     
     let admin = Address::generate(&e);
     let client = create_token_contract(&e, &admin, "Test Token", "TEST", 7, 1_000_000_0000000);
     
-    // Enable allowlist requirement
-    client.set_allowlist_required(&admin, &true);
+    // Enable whitelist requirement
+    client.set_whitelist_required(&admin, &true);
     
     let alice = Address::generate(&e);
     let mint_amount = 500_0000;
