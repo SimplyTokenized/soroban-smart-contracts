@@ -40,3 +40,7 @@ rust-toolchain
 # Backup files
 *.bak
 *.backup
+
+token/test_snapshots
+crowdsale/test_snapshots
+payout/test_snapshots

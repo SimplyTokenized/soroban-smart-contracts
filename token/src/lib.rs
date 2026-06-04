@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env, String, Symbol};
 use stellar_ownable::{self as ownable, Ownable};
 use stellar_ownable_macro::only_owner;
 use stellar_pausable::{self as pausable, Pausable};
@@ -14,6 +14,7 @@ use stellar_fungible::burnable::FungibleBurnable;
 // TTL constants for persistent storage (ledger-based)
 const MIN_TTL: u32 = 1_000_000;
 const TARGET_TTL: u32 = 1_500_000;
+const ALLOWLIST_REQUIRED_KEY: &str = "allowlist_required";
 
 #[derive(Clone)]
 #[contracttype]
@@ -91,6 +92,11 @@ impl TokenContract {
         e.storage()
             .persistent()
             .extend_ttl(&DataKey::Initialized, MIN_TTL, TARGET_TTL);
+        
+        // Allowlist requirement disabled by default (more flexible)
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, ALLOWLIST_REQUIRED_KEY.as_bytes()), &false);
     }
 
     /// Mint tokens to an address (only minter role)
@@ -113,9 +119,12 @@ impl TokenContract {
             panic!("Amount must be positive");
         }
         
-        // AllowList enforcement for KYC/MiCA compliance
-        if !Self::is_allowlisted(e, to.clone()) {
-            panic!("Mint recipient not in allowlist");
+        // AllowList enforcement for KYC/MiCA compliance (only if required)
+        let allowlist_required: bool = Self::is_allowlist_required(e);
+        if allowlist_required {
+            if !Self::is_allowlisted(e, to.clone()) {
+                panic!("Mint recipient not in allowlist");
+            }
         }
         
         // Check cap using OpenZeppelin's total supply with overflow protection
@@ -239,6 +248,28 @@ impl TokenContract {
             .get(&DataKey::AllowList(account))
             .unwrap_or(false)
     }
+
+    /// Set allowlist requirement (owner only)
+    #[only_owner]
+    pub fn set_allowlist_required(e: &Env, _caller: Address, required: bool) {
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, ALLOWLIST_REQUIRED_KEY.as_bytes()), &required);
+
+        // Emit event
+        e.events().publish(
+            (Symbol::new(e, "allowlist_requirement_updated"),),
+            required,
+        );
+    }
+
+    /// Check if allowlist is required
+    pub fn is_allowlist_required(e: &Env) -> bool {
+        e.storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, ALLOWLIST_REQUIRED_KEY.as_bytes()))
+            .unwrap_or(false)
+    }
 }
 
 
@@ -293,9 +324,12 @@ impl FungibleToken for TokenContract {
             panic!("Contract is paused");
         }
         
-        // AllowList enforcement for KYC/MiCA compliance
-        if !Self::is_allowlisted(e, to.clone()) {
-            panic!("Recipient not in allowlist");
+        // AllowList enforcement for KYC/MiCA compliance (only if required)
+        let allowlist_required: bool = Self::is_allowlist_required(e);
+        if allowlist_required {
+            if !Self::is_allowlisted(e, to.clone()) {
+                panic!("Recipient not in allowlist");
+            }
         }
         
         Base::transfer(e, &from, &to, amount);
@@ -312,9 +346,12 @@ impl FungibleToken for TokenContract {
             panic!("Contract is paused");
         }
         
-        // AllowList enforcement for KYC/MiCA compliance
-        if !Self::is_allowlisted(e, to.clone()) {
-            panic!("Recipient not in allowlist");
+        // AllowList enforcement for KYC/MiCA compliance (only if required)
+        let allowlist_required: bool = Self::is_allowlist_required(e);
+        if allowlist_required {
+            if !Self::is_allowlisted(e, to.clone()) {
+                panic!("Recipient not in allowlist");
+            }
         }
         
         Base::transfer_from(e, &spender, &from, &to, amount);
@@ -383,3 +420,6 @@ impl UpgradeableInternal for TokenContract {
         ownable::enforce_owner_auth(e);
     }
 }
+
+#[cfg(test)]
+mod test;
