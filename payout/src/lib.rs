@@ -273,10 +273,18 @@ impl PayoutContract {
 
         // Validate funding before transitioning to Payout state
         if new_state == DistributionState::Payout {
-            let required_funding = distribution.claim_balance + distribution.automatic_balance;
-            if distribution.payout_token_amount < required_funding {
-                panic!("Insufficient funding for payout. Required: {}, Funded: {}", required_funding, distribution.payout_token_amount);
+            if distribution.distribution_mode == DistributionMode::Proportional {
+                if distribution.total_snapshot_balance == 0 || distribution.total_distribution_amount == 0 {
+                    // Skip validation if values not set
+                } else {
+                    let snapshot_shares = distribution.claim_balance + distribution.automatic_balance;
+                    let required_funding = (snapshot_shares * distribution.total_distribution_amount) / distribution.total_snapshot_balance;
+                    if distribution.payout_token_amount < required_funding {
+                        panic!("Insufficient funding for payout. Required: {}, Funded: {}", required_funding, distribution.payout_token_amount);
+                    }
+                }
             }
+            // Manual mode: no validation (admin responsible for ensuring correct funding)
         }
 
         // Validate completion before transitioning to Done state

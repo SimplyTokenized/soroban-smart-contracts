@@ -11,7 +11,8 @@ use soroban_sdk::{
 };
 
 fn create_token_contract<'a>(e: &Env, admin: &Address) -> token::Client<'a> {
-    let contract_address = e.register_stellar_asset_contract(admin.clone());
+    let sac = e.register_stellar_asset_contract_v2(admin.clone());
+    let contract_address = sac.address();
     token::Client::new(e, &contract_address)
 }
 
@@ -335,12 +336,12 @@ fn test_get_distribution_summary() {
     let client = create_payout_contract(&e, &token);
     
     // Create distribution
-    let distribution_id = client.create_distribution(&1, &token.address);
+    let distribution_id = client.create_distribution(&0, &token.address);
     
     // Get summary
     let summary = client.get_distribution_summary(&distribution_id);
     assert_eq!(summary.0, 1); // distribution_id
-    assert_eq!(summary.1, 1); // snapshot_ledger
+    assert_eq!(summary.1, 0); // snapshot_ledger
     assert_eq!(summary.2, token.address); // payout_token
     assert_eq!(summary.5, 0); // investor_count
     assert_eq!(summary.6, DistributionState::Setup); // state
