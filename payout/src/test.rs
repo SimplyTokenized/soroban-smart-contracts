@@ -1,12 +1,13 @@
 #![cfg(test)]
 use crate::{
-    PayoutContract, PayoutContractClient,
+    PayoutContract, PayoutContractClient, PayoutMethod, DistributionState,
 };
 use soroban_sdk::{
     testutils::Address as _,
     token,
     Address,
     Env,
+    Vec,
 };
 
 fn create_token_contract<'a>(e: &Env, admin: &Address) -> token::Client<'a> {
@@ -293,7 +294,6 @@ fn test_paused_functionality() {
 }
 */
 
-/*
 #[test]
 fn test_get_required_funding_amount() {
     let e = Env::default();
@@ -303,8 +303,8 @@ fn test_get_required_funding_amount() {
     let token = create_token_contract(&e, &admin);
     let client = create_payout_contract(&e, &token);
     
-    // Create distribution with mixed payout methods
-    let distribution_id = client.create_distribution(&1, &token.address);
+    // Create distribution with mixed payout methods (use ledger 0 to avoid future ledger error)
+    let distribution_id = client.create_distribution(&0, &token.address);
     let investor1 = Address::generate(&e);
     let investor2 = Address::generate(&e);
     let investor3 = Address::generate(&e);
@@ -314,9 +314,15 @@ fn test_get_required_funding_amount() {
     
     client.set_investor_balances(&admin, &distribution_id, &investors, &balances, &methods);
     
-    // Required funding should be Claim + Automatic only (1000 + 2000 = 3000)
+    // Set total distribution amount to 10000
+    client.set_total_distribution_amount(&admin, &distribution_id, &10000);
+    
+    // Required funding calculation:
+    // - Claim + Automatic snapshot balance = 1000 + 2000 = 3000
+    // - Total snapshot balance = 1000 + 2000 + 3000 = 6000
+    // - Required funding = (3000 * 10000) / 6000 = 5000
     let required = client.get_required_funding_amount(&distribution_id);
-    assert_eq!(required, 3000);
+    assert_eq!(required, 5000);
 }
 
 #[test]
@@ -339,4 +345,3 @@ fn test_get_distribution_summary() {
     assert_eq!(summary.5, 0); // investor_count
     assert_eq!(summary.6, DistributionState::Setup); // state
 }
-*/

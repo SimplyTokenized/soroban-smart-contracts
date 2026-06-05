@@ -808,8 +808,14 @@ impl PayoutContract {
             .get(&DataKey::Distribution(distribution_id))
             .unwrap_or_else(|| panic!("Distribution not found"));
         
-        // O(1) calculation: claim_balance + automatic_balance
-        distribution.claim_balance + distribution.automatic_balance
+        // Return 0 if division would be invalid
+        if distribution.total_snapshot_balance == 0 || distribution.total_distribution_amount == 0 {
+            return 0;
+        }
+        
+        // Calculate required funding: (claim_balance + automatic_balance) * total_distribution_amount / total_snapshot_balance
+        let snapshot_shares = distribution.claim_balance + distribution.automatic_balance;
+        (snapshot_shares * distribution.total_distribution_amount) / distribution.total_snapshot_balance
     }
 
     /// Get distribution funds for specific token
