@@ -39,6 +39,7 @@ impl TokenContract {
         name: String,
         symbol: String,
         decimals: u32,
+        whitelist_required: Option<bool>,
     ) {
         // Check if already initialized
         let initialized: bool = e
@@ -93,10 +94,10 @@ impl TokenContract {
             .persistent()
             .extend_ttl(&DataKey::Initialized, MIN_TTL, TARGET_TTL);
         
-        // Whitelist requirement disabled by default (more flexible)
+        // Whitelist requirement (configurable at deployment, defaults to false)
         e.storage()
             .persistent()
-            .set(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), &false);
+            .set(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), &whitelist_required.unwrap_or(false));
     }
 
     /// Mint tokens to an address (only minter role)

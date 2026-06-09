@@ -25,6 +25,7 @@ fn create_token_contract<'a>(
         String::from_str(e, name),
         String::from_str(e, symbol),
         decimals,
+        None::<bool>,
     ));
     let client = TokenContractClient::new(e, &contract_id);
     
@@ -256,6 +257,69 @@ fn test_set_whitelist_required() {
     
     // Set back to false
     client.set_whitelist_required(&admin, &false);
+    assert_eq!(client.is_whitelist_required(), false);
+}
+
+#[test]
+fn test_deployment_with_whitelist_required_true() {
+    let e = Env::default();
+    e.mock_all_auths();
+    
+    let admin = Address::generate(&e);
+    let cap = 1_000_000_0000000i128;
+    let contract_id = e.register(TokenContract, (
+        admin.clone(),
+        cap,
+        String::from_str(&e, "Test Token"),
+        String::from_str(&e, "TEST"),
+        7u32,
+        Some(true),
+    ));
+    let client = TokenContractClient::new(&e, &contract_id);
+    
+    // Verify whitelist_required is set to true
+    assert_eq!(client.is_whitelist_required(), true);
+}
+
+#[test]
+fn test_deployment_with_whitelist_required_false() {
+    let e = Env::default();
+    e.mock_all_auths();
+    
+    let admin = Address::generate(&e);
+    let cap = 1_000_000_0000000i128;
+    let contract_id = e.register(TokenContract, (
+        admin.clone(),
+        cap,
+        String::from_str(&e, "Test Token"),
+        String::from_str(&e, "TEST"),
+        7u32,
+        Some(false),
+    ));
+    let client = TokenContractClient::new(&e, &contract_id);
+    
+    // Verify whitelist_required is set to false
+    assert_eq!(client.is_whitelist_required(), false);
+}
+
+#[test]
+fn test_deployment_default_whitelist_required() {
+    let e = Env::default();
+    e.mock_all_auths();
+    
+    let admin = Address::generate(&e);
+    let cap = 1_000_000_0000000i128;
+    let contract_id = e.register(TokenContract, (
+        admin.clone(),
+        cap,
+        String::from_str(&e, "Test Token"),
+        String::from_str(&e, "TEST"),
+        7u32,
+        None::<bool>,
+    ));
+    let client = TokenContractClient::new(&e, &contract_id);
+    
+    // Verify default is false
     assert_eq!(client.is_whitelist_required(), false);
 }
 

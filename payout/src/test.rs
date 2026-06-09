@@ -21,7 +21,7 @@ fn create_payout_contract<'a>(
     token: &token::Client<'a>,
 ) -> PayoutContractClient<'a> {
     let owner = Address::generate(e);
-    let contract_id = e.register(PayoutContract, (&owner, &token.address));
+    let contract_id = e.register(PayoutContract, (&owner, &token.address, None::<bool>));
     let client = PayoutContractClient::new(e, &contract_id);
     
     client
@@ -252,6 +252,48 @@ fn test_whitelist_system() {
     
     // Disable whitelist requirement
     client.update_whitelist_requirement(&admin, &false);
+    assert_eq!(client.require_whitelist(), false);
+}
+
+#[test]
+fn test_deployment_with_whitelist_required_true() {
+    let e = Env::default();
+    e.mock_all_auths();
+    
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let contract_id = e.register(PayoutContract, (&admin, &token.address, Some(true)));
+    let client = PayoutContractClient::new(&e, &contract_id);
+    
+    // Verify whitelist_required is set to true
+    assert_eq!(client.require_whitelist(), true);
+}
+
+#[test]
+fn test_deployment_with_whitelist_required_false() {
+    let e = Env::default();
+    e.mock_all_auths();
+    
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let contract_id = e.register(PayoutContract, (&admin, &token.address, Some(false)));
+    let client = PayoutContractClient::new(&e, &contract_id);
+    
+    // Verify whitelist_required is set to false
+    assert_eq!(client.require_whitelist(), false);
+}
+
+#[test]
+fn test_deployment_default_whitelist_required() {
+    let e = Env::default();
+    e.mock_all_auths();
+    
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let contract_id = e.register(PayoutContract, (&admin, &token.address, None::<bool>));
+    let client = PayoutContractClient::new(&e, &contract_id);
+    
+    // Verify default is false
     assert_eq!(client.require_whitelist(), false);
 }
 

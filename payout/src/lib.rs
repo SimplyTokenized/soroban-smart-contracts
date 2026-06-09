@@ -130,6 +130,7 @@ impl PayoutContract {
         e: &Env,
         owner: Address,
         base_token: Address,
+        whitelist_required: Option<bool>,
     ) {
         // Set ownership
         ownable::set_owner(e, &owner);
@@ -147,10 +148,10 @@ impl PayoutContract {
             .persistent()
             .set(&Bytes::from_slice(e, NEXT_DISTRIBUTION_ID_KEY.as_bytes()), &1u64);
 
-        // Whitelist requirement disabled by default
+        // Whitelist requirement (configurable at deployment, defaults to false)
         e.storage()
             .persistent()
-            .set(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()), &false);
+            .set(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()), &whitelist_required.unwrap_or(false));
     }
 
     // ========== Phase 1: Distribution Management ==========
