@@ -163,6 +163,44 @@ Manages token sales with:
 - Secure fund collection
 - Access control and pausability
 - Upgrade support
+- **SEP-40 Oracle Integration**: Per-asset oracle configuration for automatic price fetching
+
+#### Oracle Integration
+
+The crowdsale contract supports two pricing modes per asset:
+
+**Manual Mode (Default)**:
+- Set exchange rates manually via `set_asset_rate()`
+- Backward compatible with existing deployments
+- Admin-controlled rate updates
+
+**Oracle Mode**:
+- Configure SEP-40 compatible oracles (e.g., Reflector) per asset
+- Automatic price fetching during token purchases
+- Use `set_asset_oracle(asset_contract, oracle_address, asset_code)` to configure
+- Revert to manual mode with `set_asset_manual(asset_contract)`
+
+**Example Configuration**:
+```rust
+// Configure Reflector oracle for USDC
+set_asset_oracle(
+    usdc_address,
+    reflector_address,  // e.g., CCYOZJCOPG34LLQQ7N24YXBM7LL62R7ONMZ3G6WZAAYPB5OYKOMJRN63 (testnet)
+    Bytes::from_slice(b"USDC")
+)
+
+// Check rate source
+get_asset_rate_source(asset)  // Returns RateSource::Oracle or RateSource::Manual
+
+// Get oracle configuration
+get_asset_oracle_config(asset)  // Returns (oracle_address, asset_code)
+```
+
+**Available SEP-40 Oracle Addresses**:
+- **Testnet**: CCYOZJCOPG34LLQQ7N24YXBM7LL62R7ONMZ3G6WZAAYPB5OYKOMJRN63 (Foreign Exchange)
+- **Mainnet**: CALI2BYU2JE6WVRUFYTS6MSBNEHGJ35P4AVCZYF3B6QOE3QKOB2PLE6M
+
+See [Reflector Network](https://reflector.network) for more oracle options.
 
 ### Payout Contract
 
@@ -193,7 +231,8 @@ Automated distribution system:
 
 1. **Configure Testnet**
    ```bash
-   soroban network add testnet \
+   sSEP-40 Oracle**: v1.4.0 (for oracle price feeds)
+- **oroban network add testnet \
      --rpc-url https://soroban-testnet.stellar.org:443 \
      --network-passphrase "Test SDF Network ; September 2015"
    ```

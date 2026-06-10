@@ -1,11 +1,12 @@
 #![cfg(test)]
 use crate::{
-    CrowdsaleContract, CrowdsaleContractClient
+    CrowdsaleContract, CrowdsaleContractClient, RateSource
 };
 use soroban_sdk::{
     testutils::{Address as _},
     token,
     Address,
+    Bytes,
     Env,
 };
 
@@ -349,6 +350,78 @@ fn test_remove_asset_rate() {
     // Verify rate was removed
     assert_eq!(client.has_asset_rate(&stablecoin.address), false);
     assert_eq!(client.calculate_tokens(&stablecoin.address, &50_000000), 0);
+}
+
+#[test]
+fn test_set_asset_oracle() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_crowdsale_contract(&e, &token);
+
+    let stablecoin = create_token_contract(&e, &admin);
+    let oracle_address = Address::generate(&e);
+    let asset_code = Bytes::from_slice(&e, b"USDC");
+
+    // Configure oracle for asset
+    client.set_asset_oracle(
+        &admin,
+        &stablecoin.address,
+        &oracle_address,
+        &asset_code,
+    );
+
+    // Verify oracle configuration
+    assert_eq!(client.get_asset_rate_source(&stablecoin.address), RateSource::Oracle);
+    let config = client.get_asset_oracle_config(&stablecoin.address);
+    assert!(config.is_some());
+    let (addr, code) = config.unwrap();
+    assert_eq!(addr, oracle_address);
+    assert_eq!(code, asset_code);
+}
+
+#[test]
+fn test_set_asset_manual() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_crowdsale_contract(&e, &token);
+
+    let stablecoin = create_token_contract(&e, &admin);
+
+    // Configure oracle first
+    let oracle_address = Address::generate(&e);
+    let asset_code = Bytes::from_slice(&e, b"USDC");
+    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_address, &asset_code);
+
+    // Verify oracle mode
+    assert_eq!(client.get_asset_rate_source(&stablecoin.address), RateSource::Oracle);
+
+    // Revert to manual mode
+    client.set_asset_manual(&admin, &stablecoin.address);
+
+    // Verify manual mode
+    assert_eq!(client.get_asset_rate_source(&stablecoin.address), RateSource::Manual);
+}
+
+#[test]
+fn test_default_rate_source_is_manual() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_crowdsale_contract(&e, &token);
+
+    let stablecoin = create_token_contract(&e, &admin);
+
+    // Verify default is Manual
+    assert_eq!(client.get_asset_rate_source(&stablecoin.address), RateSource::Manual);
+    assert_eq!(client.get_asset_oracle_config(&stablecoin.address), None);
 }
 
 #[test]
