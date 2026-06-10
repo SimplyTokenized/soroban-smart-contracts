@@ -399,6 +399,8 @@ fn test_buy_not_whitelisted() {
     let buyer = Address::generate(&e);
     let stablecoin = create_token_contract(&e, &Address::generate(&e));
     client.support_asset(&admin, &stablecoin.address, &true);
+    // Enable whitelist requirement for this test
+    client.set_whitelist_required(&admin, &true);
     client.buy(&buyer, &stablecoin.address, &50_000000);
 }
 
@@ -436,16 +438,16 @@ fn test_set_whitelist_required() {
     let token = create_token_contract(&e, &admin);
     let client = create_crowdsale_contract(&e, &token);
     
-    // Verify default is true
-    assert_eq!(client.is_whitelist_required(), true);
-    
-    // Set to false
-    client.set_whitelist_required(&admin, &false);
+    // Verify default is false
     assert_eq!(client.is_whitelist_required(), false);
     
-    // Set back to true
+    // Set to true
     client.set_whitelist_required(&admin, &true);
     assert_eq!(client.is_whitelist_required(), true);
+    
+    // Set back to false
+    client.set_whitelist_required(&admin, &false);
+    assert_eq!(client.is_whitelist_required(), false);
 }
 
 #[test]
@@ -498,8 +500,8 @@ fn test_deployment_default_whitelist_required() {
     let treasury = Address::generate(&e);
     client.initialize(&owner, &token.address, &treasury, &None);
     
-    // Verify default is true
-    assert_eq!(client.is_whitelist_required(), true);
+    // Verify default is false
+    assert_eq!(client.is_whitelist_required(), false);
 }
 
 #[test]
@@ -576,7 +578,8 @@ fn test_buy_fails_with_whitelist_enabled() {
     let stablecoin = create_token_contract(&e, &stablecoin_admin);
     client.support_asset(&admin, &stablecoin.address, &true);
     
-    // Ensure whitelist requirement is enabled (default)
+    // Enable whitelist requirement for this test
+    client.set_whitelist_required(&admin, &true);
     assert_eq!(client.is_whitelist_required(), true);
     
     // Create a buyer without whitelisting

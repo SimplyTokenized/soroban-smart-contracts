@@ -93,10 +93,10 @@ impl CrowdsaleContract {
             .persistent()
             .set(&Bytes::from_slice(e, TOTAL_SOLD_KEY.as_bytes()), &0i128);
         
-        // Whitelist requirement (configurable at deployment, defaults to true)
+        // Whitelist requirement (configurable at deployment, defaults to false)
         e.storage()
             .persistent()
-            .set(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), &whitelist_required.unwrap_or(true));
+            .set(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), &whitelist_required.unwrap_or(false));
     }
 
     /// Configure sale parameters (owner only)
@@ -330,7 +330,7 @@ impl CrowdsaleContract {
             .storage()
             .persistent()
             .get(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()))
-            .unwrap_or(true);
+            .unwrap_or(false);
         
         if whitelist_required {
             let whitelisted: bool = e
@@ -564,7 +564,7 @@ impl CrowdsaleContract {
         e.storage()
             .persistent()
             .get(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()))
-            .unwrap_or(true)
+            .unwrap_or(false)
     }
 
     pub fn is_asset_supported(e: &Env, asset_contract: Address) -> bool {
