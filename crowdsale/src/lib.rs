@@ -64,6 +64,14 @@ pub enum RateSource {
     Oracle = 1,      // Use SEP-40 oracle
 }
 
+// SEP-40 Asset enum
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub enum Asset {
+    Stellar(Address),
+    Other(Symbol),
+}
+
 // Simple SEP-40 oracle price data structure
 #[derive(Clone, Debug)]
 #[contracttype]
@@ -83,12 +91,12 @@ impl<'a> OracleClient<'a> {
         Self { env, contract_id }
     }
 
-    pub fn price(&self, asset_code: &Bytes, timestamp: u64) -> Option<PriceData> {
+    pub fn price(&self, asset: &Asset, timestamp: u64) -> Option<PriceData> {
         // Call SEP-40 price function
         let res: PriceData = self.env.invoke_contract::<PriceData>(
             self.contract_id,
             &Symbol::new(self.env, "price"),
-            (asset_code.clone(), timestamp).into_val(self.env),
+            (asset.clone(), timestamp).into_val(self.env),
         );
         Some(res)
     }
@@ -287,7 +295,7 @@ impl CrowdsaleContract {
         _caller: Address,
         asset_contract: Address,
         oracle_address: Address,
-        asset_code: Bytes,
+        asset: Asset,
     ) {
         // Store oracle configuration
         e.storage()
@@ -298,11 +306,11 @@ impl CrowdsaleContract {
             .set(&DataKey::OracleAddress(asset_contract.clone()), &oracle_address);
         e.storage()
             .persistent()
-            .set(&DataKey::OracleAssetCode(asset_contract.clone()), &asset_code);
+            .set(&DataKey::OracleAssetCode(asset_contract.clone()), &asset);
 
         e.events().publish(
             (Symbol::new(e, "asset_oracle_configured"), asset_contract.clone()),
-            (oracle_address.clone(), asset_code.clone()),
+            (oracle_address.clone(), asset.clone()),
         );
     }
 
@@ -433,13 +441,13 @@ impl CrowdsaleContract {
                     .get(&DataKey::OracleAddress(asset_contract.clone()))
                     .unwrap_or_else(|| panic!("Oracle address not configured"));
 
-                let asset_code = e.storage().persistent()
+                let asset = e.storage().persistent()
                     .get(&DataKey::OracleAssetCode(asset_contract.clone()))
-                    .unwrap_or_else(|| panic!("Oracle asset code not configured"));
+                    .unwrap_or_else(|| panic!("Oracle asset not configured"));
 
                 // Create SEP-40 client and fetch price
                 let oracle_client = OracleClient::new(e, &oracle_address);
-                let price_data = oracle_client.price(&asset_code, e.ledger().timestamp());
+                let price_data = oracle_client.price(&asset, e.ledger().timestamp());
 
                 if price_data.is_none() {
                     panic!("Oracle price not available");
@@ -685,12 +693,12 @@ impl CrowdsaleContract {
     }
 
     /// Get oracle configuration for an asset
-    pub fn get_asset_oracle_config(e: &Env, asset_contract: Address) -> Option<(Address, Bytes)> {
+    pub fn get_asset_oracle_config(e: &Env, asset_contract: Address) -> Option<(Address, Asset)> {
         let oracle_address = e.storage().persistent()
             .get(&DataKey::OracleAddress(asset_contract.clone()))?;
-        let asset_code = e.storage().persistent()
+        let asset = e.storage().persistent()
             .get(&DataKey::OracleAssetCode(asset_contract))?;
-        Some((oracle_address, asset_code))
+        Some((oracle_address, asset))
     }
 
     pub fn token_contract(e: &Env) -> Address {

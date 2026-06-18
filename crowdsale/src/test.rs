@@ -1,13 +1,13 @@
 #![cfg(test)]
 use crate::{
-    CrowdsaleContract, CrowdsaleContractClient, RateSource
+    CrowdsaleContract, CrowdsaleContractClient, RateSource, Asset
 };
 use soroban_sdk::{
     testutils::{Address as _},
     token,
     Address,
-    Bytes,
     Env,
+    Symbol,
 };
 
 fn create_token_contract<'a>(e: &Env, admin: &Address) -> token::Client<'a> {
@@ -363,14 +363,14 @@ fn test_set_asset_oracle() {
 
     let stablecoin = create_token_contract(&e, &admin);
     let oracle_address = Address::generate(&e);
-    let asset_code = Bytes::from_slice(&e, b"USDC");
+    let asset = Asset::Other(Symbol::new(&e, "USDC"));
 
     // Configure oracle for asset
     client.set_asset_oracle(
         &admin,
         &stablecoin.address,
         &oracle_address,
-        &asset_code,
+        &asset,
     );
 
     // Verify oracle configuration
@@ -379,7 +379,7 @@ fn test_set_asset_oracle() {
     assert!(config.is_some());
     let (addr, code) = config.unwrap();
     assert_eq!(addr, oracle_address);
-    assert_eq!(code, asset_code);
+    assert_eq!(code, asset);
 }
 
 #[test]
@@ -395,8 +395,8 @@ fn test_set_asset_manual() {
 
     // Configure oracle first
     let oracle_address = Address::generate(&e);
-    let asset_code = Bytes::from_slice(&e, b"USDC");
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_address, &asset_code);
+    let asset = Asset::Other(Symbol::new(&e, "USDC"));
+    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_address, &asset);
 
     // Verify oracle mode
     assert_eq!(client.get_asset_rate_source(&stablecoin.address), RateSource::Oracle);
