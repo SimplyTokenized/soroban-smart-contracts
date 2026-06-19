@@ -717,3 +717,90 @@ fn test_oracle_mode_with_fixed_price() {
     // 2. Testing on testnet with a real Reflector oracle
     // The corrected formula now uses: base_amount = (amount * 10^oracle_decimals) / oracle_price
 }
+
+#[test]
+fn test_calculate_tokens_matches_buy_manual_mode() {
+    let e = Env::default();
+    e.mock_all_auths();
+    
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_crowdsale_contract(&e, &token);
+    
+    // Set up sale with global price (1:1)
+    let start_time = e.ledger().timestamp();
+    let end_time = start_time + 10000;
+    client.open_sale(
+        &admin,
+        &start_time,
+        &end_time,
+        &1_000_000,
+        &1_000_000,
+        &1_000_000_0000000,
+        &10_000000,
+    );
+    
+    // Create a stablecoin with per-asset rate (2:1)
+    let stablecoin = create_token_contract(&e, &admin);
+    client.support_asset(&admin, &stablecoin.address, &true);
+    client.set_asset_rate(
+        &admin,
+        &stablecoin.address,
+        &2_000_000,
+        &1_000_000,
+        &6,
+    );
+    
+    // Enable test mode
+    client.set_test_mode(&admin, &true);
+    
+    // Use admin as buyer
+    let buyer = admin.clone();
+    client.set_whitelist(&admin, &buyer, &true);
+    client.set_user_cap(&admin, &buyer, &200_000000);
+    
+    // Calculate tokens for 50 stablecoins
+    let payment_amount = 50_000000;
+    let calculated = client.calculate_tokens(&stablecoin.address, &payment_amount);
+    
+    // Buy tokens
+    client.buy(&buyer, &stablecoin.address, &payment_amount);
+    
+    // Verify calculate_tokens() matches buy() in Manual mode
+    assert_eq!(calculated, 100_000000);
+    assert_eq!(client.user_allocation(&buyer), calculated);
+}
+
+#[test]
+fn test_calculate_tokens_manual_mode_fallback() {
+    let e = Env::default();
+    e.mock_all_auths();
+    
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_crowdsale_contract(&e, &token);
+    
+    // Set up sale with global price (1:1)
+    let start_time = e.ledger().timestamp();
+    let end_time = start_time + 10000;
+    client.open_sale(
+        &admin,
+        &start_time,
+        &end_time,
+        &1_000_000,
+        &1_000_000,
+        &1_000_000_0000000,
+        &10_000000,
+    );
+    
+    // Create a stablecoin WITHOUT per-asset rate
+    let stablecoin = create_token_contract(&e, &admin);
+    client.support_asset(&admin, &stablecoin.address, &true);
+    
+    // Calculate tokens for 50 stablecoins (should use global price)
+    let payment_amount = 50_000000;
+    let calculated = client.calculate_tokens(&stablecoin.address, &payment_amount);
+    
+    // Verify it uses global price (1:1)
+    assert_eq!(calculated, 50_000000);
+}

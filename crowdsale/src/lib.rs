@@ -739,20 +739,78 @@ impl CrowdsaleContract {
 
     /// Calculate tokens for a given payment amount using the asset's rate
     pub fn calculate_tokens(e: &Env, asset_contract: Address, payment_amount: i128) -> i128 {
-        let rate: AssetRate = match e
-            .storage()
-            .persistent()
-            .get(&DataKey::AssetRate(asset_contract))
-        {
-            Some(r) => r,
-            None => return 0i128,
-        };
-
         if payment_amount <= 0 {
             return 0i128;
         }
 
-        (payment_amount * rate.rate_numerator) / rate.rate_denominator
+        // Calculate tokens based on rate source (same logic as buy())
+        match e.storage().persistent().get::<DataKey, RateSource>(
+            &DataKey::AssetRateSource(asset_contract.clone())
+        ) {
+            Some(RateSource::Oracle) => {
+                // Fetch price from SEP-40 oracle
+                let oracle_address = match e.storage().persistent()
+                    .get(&DataKey::OracleAddress(asset_contract.clone()))
+                {
+                    Some(addr) => addr,
+                    None => return 0i128,
+                };
+
+                let asset = match e.storage().persistent()
+                    .get(&DataKey::OracleAssetCode(asset_contract.clone()))
+                {
+                    Some(a) => a,
+                    None => return 0i128,
+                };
+
+                // Create SEP-40 client and fetch price
+                let oracle_client = OracleClient::new(e, &oracle_address);
+                let price_data = oracle_client.price(&asset, e.ledger().timestamp());
+
+                if price_data.is_none() {
+                    return 0i128;
+                }
+
+                let oracle_price = price_data.unwrap().price;
+                // Get oracle decimal precision
+                let oracle_decimals = oracle_client.decimals();
+                
+                // Convert payment amount to base currency using correct SEP-40 formula
+                let base_amount = (payment_amount * 10i128.pow(oracle_decimals)) / oracle_price;
+                
+                // Apply fixed offering price (price_num/price_den) to calculate tokens
+                let price_num: i128 = e.storage().persistent()
+                    .get(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()))
+                    .unwrap_or(1i128);
+                let price_den: i128 = e.storage().persistent()
+                    .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
+                    .unwrap_or(1i128);
+                
+                (base_amount * price_num) / price_den
+            },
+            Some(RateSource::Manual) | None => {
+                // Use manual rate (default behavior)
+                if let Some(asset_rate) = e.storage().persistent()
+                    .get::<DataKey, AssetRate>(&DataKey::AssetRate(asset_contract))
+                {
+                    (payment_amount * asset_rate.rate_numerator) / asset_rate.rate_denominator
+                } else {
+                    // Fallback to global price
+                    let price_num: i128 = e.storage().persistent()
+                        .get(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()))
+                        .unwrap_or(0i128);
+                    let price_den: i128 = e.storage().persistent()
+                        .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
+                        .unwrap_or(1i128);
+
+                    if price_num == 0 {
+                        return 0i128;
+                    }
+
+                    (payment_amount * price_num) / price_den
+                }
+            }
+        }
     }
 
     /// Get rate information for an asset
