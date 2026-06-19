@@ -691,9 +691,12 @@ fn test_oracle_mode_with_fixed_price() {
     
     // Configure oracle for the stablecoin
     // Note: This test validates the logic structure but requires a real oracle or mock
-    // In production, the oracle should return price such that:
-    // - For EURC: oracle_price ≈ 1_000_000 (1 EURC = 1 EUR)
-    // - Then 4 EURC → 4 EUR → 2 NWHSR (at 2 EUR per NWHSR)
+    // With the corrected SEP-40 formula:
+    // - oracle_decimals = 7 (typical Reflector precision)
+    // - For EURC: oracle_price = 10_000_000 (1 EURC = 1 EUR with 7 decimals)
+    // - Payment: 4 EURC = 4_000_000 (with 6 decimals)
+    // - base_amount = (4_000_000 * 10^7) / 10_000_000 = 4_000_000 (4 EUR with 7 decimals)
+    // - tokens = (4_000_000 * 1) / 2_000_000 = 2_000_000 (2 NWHSR)
     let oracle_address = Address::generate(&e);
     let asset = Asset::Other(Symbol::new(&e, "EURC"));
     client.set_asset_oracle(&admin, &stablecoin.address, &oracle_address, &asset);
@@ -708,8 +711,9 @@ fn test_oracle_mode_with_fixed_price() {
     let buyer = admin.clone();
     client.set_user_cap(&admin, &buyer, &100_000000);
     
-    // Note: This test would fail without a proper oracle mock
-    // The actual buy would panic with "Oracle price not available"
-    // This is expected as we don't have a mock oracle implementation here
-    // In production, ensure the oracle returns correct price for the asset
+    // Note: This test validates configuration only
+    // Full integration testing requires either:
+    // 1. A mock oracle contract implementing SEP-40 with decimals() and price() functions
+    // 2. Testing on testnet with a real Reflector oracle
+    // The corrected formula now uses: base_amount = (amount * 10^oracle_decimals) / oracle_price
 }

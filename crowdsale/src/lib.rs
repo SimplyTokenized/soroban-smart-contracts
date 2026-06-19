@@ -100,6 +100,16 @@ impl<'a> OracleClient<'a> {
         );
         Some(res)
     }
+
+    pub fn decimals(&self) -> u32 {
+        // Call SEP-40 decimals function to get price precision
+        let res: u32 = self.env.invoke_contract::<u32>(
+            self.contract_id,
+            &Symbol::new(self.env, "decimals"),
+            ().into_val(self.env),
+        );
+        res
+    }
 }
 
 #[derive(Upgradeable)]
@@ -454,8 +464,12 @@ impl CrowdsaleContract {
                 }
 
                 let oracle_price = price_data.unwrap().price;
-                // Convert payment amount to EUR using oracle price
-                let eur_amount = (amount * oracle_price) / 1_000_000i128;
+                // Get oracle decimal precision
+                let oracle_decimals = oracle_client.decimals();
+                
+                // Convert payment amount to base currency using correct SEP-40 formula
+                // base_amount = (amount * 10^oracle_decimals) / oracle_price
+                let base_amount = (amount * 10i128.pow(oracle_decimals)) / oracle_price;
                 
                 // Apply fixed offering price (price_num/price_den) to calculate tokens
                 let price_num: i128 = e.storage().persistent()
@@ -465,7 +479,7 @@ impl CrowdsaleContract {
                     .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
                     .unwrap();
                 
-                (eur_amount * price_num) / price_den
+                (base_amount * price_num) / price_den
             },
             Some(RateSource::Manual) | None => {
                 // Use manual rate (default behavior)
