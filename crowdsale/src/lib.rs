@@ -454,10 +454,18 @@ impl CrowdsaleContract {
                 }
 
                 let oracle_price = price_data.unwrap().price;
-                // Convert oracle price to token allocation
-                // Assuming oracle price is in same units as payment amount
-                // Adjust based on your specific use case and decimal handling
-                (amount * oracle_price) / 1_000_000i128
+                // Convert payment amount to EUR using oracle price
+                let eur_amount = (amount * oracle_price) / 1_000_000i128;
+                
+                // Apply fixed offering price (price_num/price_den) to calculate tokens
+                let price_num: i128 = e.storage().persistent()
+                    .get(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()))
+                    .unwrap();
+                let price_den: i128 = e.storage().persistent()
+                    .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
+                    .unwrap();
+                
+                (eur_amount * price_num) / price_den
             },
             Some(RateSource::Manual) | None => {
                 // Use manual rate (default behavior)
