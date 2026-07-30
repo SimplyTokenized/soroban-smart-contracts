@@ -9,10 +9,24 @@ use stellar_upgradeable::UpgradeableInternal;
 use stellar_upgradeable_macros::Upgradeable;
 use stellar_default_impl_macro::default_impl;
 
+// TTL constants for persistent storage (ledger-based)
+const MIN_TTL: u32 = 1_000_000;
+const TARGET_TTL: u32 = 1_500_000;
+
 // Storage keys
 const BASE_TOKEN_KEY: &str = "base_token";
 const NEXT_DISTRIBUTION_ID_KEY: &str = "next_distribution_id";
 const REQUIRE_WHITELIST_KEY: &str = "require_whitelist";
+const CONTRACT_VERSION_KEY: &str = "contract_version";
+
+// Contract version - increment on upgrades
+const CONTRACT_VERSION: u32 = 1;
+
+// MAX_BATCH_SIZE = 200
+// This value is derived from CPU/footprint budget measurements.
+// Batch operations should not exceed this limit to avoid transaction failures.
+// This value should be re-measured and adjusted if contract logic changes significantly
+// or if network conditions warrant a different limit.
 const MAX_BATCH_SIZE: u64 = 200;
 
 // Distribution modes
@@ -152,11 +166,17 @@ impl PayoutContract {
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()), &whitelist_required.unwrap_or(false));
+
+        // Set contract version for upgrade tracking
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, CONTRACT_VERSION_KEY.as_bytes()), &CONTRACT_VERSION);
     }
 
     // ========== Phase 1: Distribution Management ==========
 
     /// Create a new distribution in Proportional mode
+    #[only_owner]
     #[when_not_paused]
     pub fn create_distribution(
         e: &Env,
@@ -167,6 +187,7 @@ impl PayoutContract {
     }
 
     /// Create a new distribution with specific mode
+    #[only_owner]
     #[when_not_paused]
     pub fn create_distribution_with_mode(
         e: &Env,
@@ -249,7 +270,6 @@ impl PayoutContract {
     #[only_owner]
     pub fn advance_distribution_state(
         e: &Env,
-        _caller: Address,
         distribution_id: u64,
         new_state: DistributionState,
     ) {
@@ -336,6 +356,51 @@ impl PayoutContract {
             );
     }
 
+    /// Withdraw unclaimed funds from a completed distribution (owner only)
+    #[only_owner]
+    pub fn withdraw_unclaimed(e: &Env, distribution_id: u64) -> i128 {
+        let mut distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+
+        // Only allow withdrawal from Done distributions
+        if distribution.state != DistributionState::Done {
+            panic!("Distribution must be in Done state to withdraw unclaimed funds");
+        }
+
+        // Calculate unclaimed amount
+        let unclaimed_amount = distribution.payout_token_amount - distribution.payout_token_claimed;
+        
+        if unclaimed_amount <= 0 {
+            panic!("No unclaimed funds to withdraw");
+        }
+
+        // Get owner address
+        let owner = ownable::get_owner(e)
+            .expect("Owner not set");
+
+        // Transfer unclaimed funds to owner
+        let token_client = token::Client::new(e, &distribution.payout_token);
+        token_client.transfer(&e.current_contract_address(), &owner, &unclaimed_amount);
+
+        // Update distribution to prevent double-withdrawal
+        distribution.payout_token_claimed = distribution.payout_token_amount;
+        e.storage()
+            .persistent()
+            .set(&DataKey::Distribution(distribution_id), &distribution);
+
+        // Emit event
+        e.events()
+            .publish(
+                (Symbol::new(e, "unclaimed_withdrawn"), distribution_id),
+                unclaimed_amount,
+            );
+
+        unclaimed_amount
+    }
+
     // ========== Phase 2: Snapshot & Investor Management ==========
 
     /// Get investor list for distribution
@@ -350,7 +415,6 @@ impl PayoutContract {
     #[only_owner]
     pub fn set_investor_balances(
         e: &Env,
-        _caller: Address,
         distribution_id: u64,
         investors: Vec<Address>,
         balances: Vec<i128>,
@@ -454,6 +518,36 @@ impl PayoutContract {
                     PayoutMethod::Bank => distribution.bank_balance += balance,
                     PayoutMethod::None => {}
                 }
+            } else if balance == 0 && old_balance > 0 {
+                // Balance set to zero - remove investor from distribution
+                e.storage()
+                    .persistent()
+                    .remove(&DataKey::SnapshotBalance(distribution_id, investor.clone()));
+                e.storage()
+                    .persistent()
+                    .remove(&DataKey::PayoutPreference(distribution_id, investor.clone()));
+                e.storage()
+                    .persistent()
+                    .remove(&DataKey::IsInvestor(distribution_id, investor.clone()));
+                distribution.investor_count -= 1;
+                balance_delta -= old_balance;
+
+                // Remove from investor list
+                let investor_list: Vec<Address> = e
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::InvestorList(distribution_id))
+                    .unwrap_or(Vec::new(e));
+                let mut new_list = Vec::new(e);
+                for i in 0..investor_list.len() {
+                    let addr = investor_list.get(i).unwrap();
+                    if addr != investor {
+                        new_list.push_back(addr.clone());
+                    }
+                }
+                e.storage()
+                    .persistent()
+                    .set(&DataKey::InvestorList(distribution_id), &new_list);
             }
         }
 
@@ -474,7 +568,6 @@ impl PayoutContract {
     #[only_owner]
     pub fn set_investor_balance(
         e: &Env,
-        _caller: Address,
         distribution_id: u64,
         investor: Address,
         balance: i128,
@@ -530,6 +623,17 @@ impl PayoutContract {
                     .set(&DataKey::IsInvestor(distribution_id, investor.clone()), &true);
                 distribution.investor_count += 1;
                 balance_delta = balance;
+
+                // Add to investor list
+                let mut investor_list: Vec<Address> = e
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::InvestorList(distribution_id))
+                    .unwrap_or(Vec::new(e));
+                investor_list.push_back(investor.clone());
+                e.storage()
+                    .persistent()
+                    .set(&DataKey::InvestorList(distribution_id), &investor_list);
             } else {
                 // Update existing investor - adjust delta
                 balance_delta = balance - old_balance;
@@ -549,6 +653,36 @@ impl PayoutContract {
                 PayoutMethod::Bank => distribution.bank_balance += balance,
                 PayoutMethod::None => {}
             }
+        } else if balance == 0 && old_balance > 0 {
+            // Balance set to zero - remove investor from distribution
+            e.storage()
+                .persistent()
+                .remove(&DataKey::SnapshotBalance(distribution_id, investor.clone()));
+            e.storage()
+                .persistent()
+                .remove(&DataKey::PayoutPreference(distribution_id, investor.clone()));
+            e.storage()
+                .persistent()
+                .remove(&DataKey::IsInvestor(distribution_id, investor.clone()));
+            distribution.investor_count -= 1;
+            balance_delta = -old_balance;
+
+            // Remove from investor list
+            let investor_list: Vec<Address> = e
+                .storage()
+                .persistent()
+                .get(&DataKey::InvestorList(distribution_id))
+                .unwrap_or(Vec::new(e));
+            let mut new_list = Vec::new(e);
+            for i in 0..investor_list.len() {
+                let addr = investor_list.get(i).unwrap();
+                if addr != investor {
+                    new_list.push_back(addr.clone());
+                }
+            }
+            e.storage()
+                .persistent()
+                .set(&DataKey::InvestorList(distribution_id), &new_list);
         }
 
         distribution.total_snapshot_balance += balance_delta;
@@ -568,10 +702,8 @@ impl PayoutContract {
     #[only_owner]
     pub fn take_onchain_snapshot(
         e: &Env,
-        _caller: Address,
         distribution_id: u64,
         investors: Vec<Address>,
-        base_token: Address,
         methods: Vec<PayoutMethod>,
     ) {
         let distribution: Distribution = e
@@ -594,6 +726,16 @@ impl PayoutContract {
         if investors.is_empty() || investors.len() as u64 > MAX_BATCH_SIZE {
             panic!("Invalid batch size");
         }
+
+        // Read base token from storage
+        let base_token: Address = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, BASE_TOKEN_KEY.as_bytes()))
+            .unwrap_or_else(|| panic!("Base token not set"));
+        e.storage()
+            .persistent()
+            .extend_ttl(&Bytes::from_slice(e, BASE_TOKEN_KEY.as_bytes()), MIN_TTL, TARGET_TTL);
 
         let token_client = token::Client::new(e, &base_token);
         let mut balances = Vec::new(e);
@@ -734,7 +876,6 @@ impl PayoutContract {
     #[only_owner]
     pub fn fund_payout_token(
         e: &Env,
-        _caller: Address,
         distribution_id: u64,
         amount: i128,
         token: Address,
@@ -749,10 +890,16 @@ impl PayoutContract {
             panic!("Invalid amount");
         }
 
+        // Validate token matches distribution's payout_token
+        if token != distribution.payout_token {
+            panic!("Token does not match distribution payout token");
+        }
+
         // Transfer tokens from caller to contract
         let token_client = token::Client::new(e, &token);
-        _caller.require_auth();
-        token_client.transfer(&_caller, &e.current_contract_address(), &amount);
+        let caller = e.current_contract_address(); // For now, use contract address as caller
+        caller.require_auth();
+        token_client.transfer(&caller, &e.current_contract_address(), &amount);
 
         // Update distribution funding
         distribution.payout_token_amount += amount;
@@ -782,7 +929,6 @@ impl PayoutContract {
     #[only_owner]
     pub fn set_total_distribution_amount(
         e: &Env,
-        _caller: Address,
         distribution_id: u64,
         amount: i128,
     ) {
@@ -835,13 +981,26 @@ impl PayoutContract {
             .unwrap_or(0i128)
     }
 
+    /// Get available funds in distribution-specific pool
+    pub fn get_distribution_available_funds(e: &Env, distribution_id: u64) -> i128 {
+        let distribution: Distribution = e
+            .storage()
+            .persistent()
+            .get(&DataKey::Distribution(distribution_id))
+            .unwrap_or_else(|| panic!("Distribution not found"));
+        
+        e.storage()
+            .persistent()
+            .get(&DataKey::DistributionFunds(distribution_id, distribution.payout_token))
+            .unwrap_or(0i128)
+    }
+
     // ========== Phase 4: Payout Calculations ==========
 
     /// Compute payout amounts for all investors (Proportional mode)
     #[only_owner]
     pub fn compute_payout_amounts(
         e: &Env,
-        _caller: Address,
         distribution_id: u64,
         total_payout_amount: i128,
     ) {
@@ -869,6 +1028,23 @@ impl PayoutContract {
             panic!("Total snapshot balance is zero");
         }
 
+        // Validate total_payout_amount against funded balance
+        let actual_payout_amount = if total_payout_amount > distribution.payout_token_amount {
+            // Scale down to available funds
+            distribution.payout_token_amount
+        } else {
+            total_payout_amount
+        };
+
+        if actual_payout_amount < total_payout_amount {
+            // Emit warning event if scaling occurred
+            e.events()
+                .publish(
+                    (Symbol::new(e, "payout_amount_scaled"), distribution_id),
+                    (total_payout_amount, actual_payout_amount),
+                );
+        }
+
         // Get investor list
         let investor_list: Vec<Address> = e
             .storage()
@@ -892,8 +1068,8 @@ impl PayoutContract {
             }
 
             // Calculate proportional payout amount
-            // payout = (investor_balance / total_snapshot_balance) * total_payout_amount
-            let payout_amount = (investor_balance * total_payout_amount) / distribution.total_snapshot_balance;
+            // payout = (investor_balance / total_snapshot_balance) * actual_payout_amount
+            let payout_amount = (investor_balance * actual_payout_amount) / distribution.total_snapshot_balance;
 
             // Store payout amount
             e.storage()
@@ -913,7 +1089,6 @@ impl PayoutContract {
     #[only_owner]
     pub fn set_manual_payout_amounts(
         e: &Env,
-        _caller: Address,
         distribution_id: u64,
         investors: Vec<Address>,
         amounts: Vec<i128>,
@@ -998,7 +1173,10 @@ impl PayoutContract {
             .storage()
             .persistent()
             .get(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()))
-            .unwrap_or(false);
+            .unwrap();
+        e.storage()
+            .persistent()
+            .extend_ttl(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()), MIN_TTL, TARGET_TTL);
         if require_whitelist {
             let whitelisted: bool = e
                 .storage()
@@ -1040,9 +1218,24 @@ impl PayoutContract {
             panic!("No payout amount");
         }
 
+        // Check sufficient funds in distribution-specific pool
+        let available_funds: i128 = e
+            .storage()
+            .persistent()
+            .get(&DataKey::DistributionFunds(distribution_id, distribution.payout_token.clone()))
+            .unwrap_or(0i128);
+        if available_funds < payout_amount {
+            panic!("Insufficient funds in distribution pool");
+        }
+
         // Transfer tokens from distribution pool to investor
         let token_client = token::Client::new(e, &distribution.payout_token);
         token_client.transfer(&e.current_contract_address(), &investor, &payout_amount);
+
+        // Decrement from distribution-specific funds pool
+        e.storage()
+            .persistent()
+            .set(&DataKey::DistributionFunds(distribution_id, distribution.payout_token.clone()), &(available_funds - payout_amount));
 
         // Mark as paid out
         e.storage()
@@ -1067,7 +1260,6 @@ impl PayoutContract {
     #[only_owner]
     pub fn batch_distribute_automatic(
         e: &Env,
-        _caller: Address,
         distribution_id: u64,
         investors: Vec<Address>,
     ) {
@@ -1122,8 +1314,23 @@ impl PayoutContract {
                 continue; // Skip if no amount
             }
 
+            // Check sufficient funds in distribution-specific pool
+            let available_funds: i128 = e
+                .storage()
+                .persistent()
+                .get(&DataKey::DistributionFunds(distribution_id, distribution.payout_token.clone()))
+                .unwrap_or(0i128);
+            if available_funds < payout_amount {
+                continue; // Skip if insufficient funds
+            }
+
             // Transfer tokens (investor is already &Address from Vec::get)
             token_client.transfer(&e.current_contract_address(), &investor, &payout_amount);
+
+            // Decrement from distribution-specific funds pool
+            e.storage()
+                .persistent()
+                .set(&DataKey::DistributionFunds(distribution_id, distribution.payout_token.clone()), &(available_funds - payout_amount));
 
             // Mark as paid out
             e.storage()
@@ -1150,7 +1357,6 @@ impl PayoutContract {
     #[only_owner]
     pub fn batch_mark_payout_as_paid(
         e: &Env,
-        _caller: Address,
         distribution_id: u64,
         investors: Vec<Address>,
     ) {
@@ -1252,14 +1458,28 @@ impl PayoutContract {
             .unwrap_or(0i128)
     }
 
-    /// Get total claimable amount for distribution
+    /// Get total claimable amount for distribution (in payout token units)
     pub fn get_total_claimable(e: &Env, distribution_id: u64) -> i128 {
         let distribution: Distribution = e
             .storage()
             .persistent()
             .get(&DataKey::Distribution(distribution_id))
             .unwrap_or_else(|| panic!("Distribution not found"));
-        distribution.claim_balance - distribution.payout_token_claimed
+
+        // Calculate claimable amount in payout token units
+        // Formula: (claim_balance / total_snapshot_balance) * total_distribution_amount - payout_token_claimed
+        if distribution.total_snapshot_balance == 0 || distribution.total_distribution_amount == 0 {
+            return 0i128;
+        }
+
+        let total_claimable = (distribution.claim_balance * distribution.total_distribution_amount) / distribution.total_snapshot_balance;
+        let claimable_remaining = total_claimable - distribution.payout_token_claimed;
+
+        if claimable_remaining < 0 {
+            0i128
+        } else {
+            claimable_remaining
+        }
     }
 
     /// Get distribution summary for frontend
@@ -1303,7 +1523,7 @@ impl PayoutContract {
 
     /// Add address to whitelist (owner only)
     #[only_owner]
-    pub fn add_to_whitelist(e: &Env, _caller: Address, account: Address) {
+    pub fn add_to_whitelist(e: &Env, account: Address) {
         e.storage()
             .persistent()
             .set(&DataKey::Whitelist(account.clone()), &true);
@@ -1321,10 +1541,10 @@ impl PayoutContract {
 
     /// Remove address from whitelist (owner only)
     #[only_owner]
-    pub fn remove_from_whitelist(e: &Env, _caller: Address, account: Address) {
+    pub fn remove_from_whitelist(e: &Env, account: Address) {
         e.storage()
             .persistent()
-            .set(&DataKey::Whitelist(account.clone()), &false);
+            .remove(&DataKey::Whitelist(account.clone()));
 
         // Emit event
         e.events()
@@ -1339,7 +1559,7 @@ impl PayoutContract {
 
     /// Update whitelist requirement (owner only)
     #[only_owner]
-    pub fn update_whitelist_requirement(e: &Env, _caller: Address, required: bool) {
+    pub fn update_whitelist_requirement(e: &Env, required: bool) {
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()), &required);
@@ -1380,6 +1600,14 @@ impl PayoutContract {
             .persistent()
             .get(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()))
             .unwrap_or(false)
+    }
+
+    /// Get contract version for upgrade tracking
+    pub fn version(e: &Env) -> u32 {
+        e.storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, CONTRACT_VERSION_KEY.as_bytes()))
+            .unwrap_or(CONTRACT_VERSION)
     }
 }
 

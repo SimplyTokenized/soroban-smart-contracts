@@ -15,13 +15,16 @@ use stellar_fungible::burnable::FungibleBurnable;
 const MIN_TTL: u32 = 1_000_000;
 const TARGET_TTL: u32 = 1_500_000;
 const WHITELIST_REQUIRED_KEY: &str = "whitelist_required";
+const CONTRACT_VERSION_KEY: &str = "contract_version";
+
+// Contract version - increment on upgrades
+const CONTRACT_VERSION: u32 = 1;
 
 #[derive(Clone)]
 #[contracttype]
 pub enum DataKey {
     MinterRole(Address),
     Whitelist(Address),
-    Initialized,
     Cap,
 }
 
@@ -41,16 +44,6 @@ impl TokenContract {
         decimals: u32,
         whitelist_required: Option<bool>,
     ) {
-        // Check if already initialized
-        let initialized: bool = e
-            .storage()
-            .persistent()
-            .get(&DataKey::Initialized)
-            .unwrap_or(false);
-        if initialized {
-            panic!("Contract already initialized");
-        }
-        
         // Validate inputs
         if cap <= 0 {
             panic!("Cap must be positive");
@@ -85,19 +78,16 @@ impl TokenContract {
         e.storage()
             .persistent()
             .extend_ttl(&DataKey::Whitelist(owner.clone()), MIN_TTL, TARGET_TTL);
-        
-        // Mark as initialized with TTL extension
-        e.storage()
-            .persistent()
-            .set(&DataKey::Initialized, &true);
-        e.storage()
-            .persistent()
-            .extend_ttl(&DataKey::Initialized, MIN_TTL, TARGET_TTL);
-        
+
         // Whitelist requirement (configurable at deployment, defaults to false)
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), &whitelist_required.unwrap_or(false));
+
+        // Set contract version for upgrade tracking
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, CONTRACT_VERSION_KEY.as_bytes()), &CONTRACT_VERSION);
     }
 
     /// Mint tokens to an address (only minter role)
@@ -181,6 +171,14 @@ impl TokenContract {
     }
 
     /// Update the minting cap (owner only)
+    /// 
+    /// Semantics:
+    /// - The cap represents the maximum total supply that can ever exist
+    /// - Cap can only be increased, never decreased, to maintain token scarcity
+    /// - New cap must exceed current total supply to allow future minting
+    /// - This is a governance action that should be used cautiously
+    /// - Burn operations reduce total supply but do NOT reduce the cap
+    /// - Cap changes are permanent and irreversible
     #[only_owner]
     pub fn set_cap(e: &Env, _caller: Address, new_cap: i128) {
         if new_cap <= 0 {
@@ -211,12 +209,18 @@ impl TokenContract {
     /// Set whitelist status for KYC (owner only)
     #[only_owner]
     pub fn set_whitelist(e: &Env, _caller: Address, account: Address, whitelisted: bool) {
-        e.storage()
-            .persistent()
-            .set(&DataKey::Whitelist(account.clone()), &whitelisted);
-        e.storage()
-            .persistent()
-            .extend_ttl(&DataKey::Whitelist(account.clone()), MIN_TTL, TARGET_TTL);
+        if whitelisted {
+            e.storage()
+                .persistent()
+                .set(&DataKey::Whitelist(account.clone()), &true);
+            e.storage()
+                .persistent()
+                .extend_ttl(&DataKey::Whitelist(account.clone()), MIN_TTL, TARGET_TTL);
+        } else {
+            e.storage()
+                .persistent()
+                .remove(&DataKey::Whitelist(account.clone()));
+        }
         
         // Emit whitelist change event
         e.events().publish(
@@ -236,18 +240,26 @@ impl TokenContract {
     
     /// Check if an address has minter role
     pub fn is_minter(e: &Env, account: Address) -> bool {
+        let is_minter = e.storage()
+            .persistent()
+            .get(&DataKey::MinterRole(account.clone()))
+            .unwrap(); // Panic on expiry for compliance-critical key
         e.storage()
             .persistent()
-            .get(&DataKey::MinterRole(account))
-            .unwrap_or(false)
+            .extend_ttl(&DataKey::MinterRole(account), MIN_TTL, TARGET_TTL);
+        is_minter
     }
 
     /// Check if an address is whitelisted
     pub fn is_whitelisted(e: &Env, account: Address) -> bool {
+        let whitelisted = e.storage()
+            .persistent()
+            .get(&DataKey::Whitelist(account.clone()))
+            .unwrap(); // Panic on expiry for compliance-critical key
         e.storage()
             .persistent()
-            .get(&DataKey::Whitelist(account))
-            .unwrap_or(false)
+            .extend_ttl(&DataKey::Whitelist(account), MIN_TTL, TARGET_TTL);
+        whitelisted
     }
 
     /// Set whitelist requirement (owner only)
@@ -266,10 +278,22 @@ impl TokenContract {
 
     /// Check if whitelist is required
     pub fn is_whitelist_required(e: &Env) -> bool {
-        e.storage()
+        let required = e.storage()
             .persistent()
             .get(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()))
-            .unwrap_or(false)
+            .unwrap(); // Panic on expiry for compliance-critical key
+        e.storage()
+            .persistent()
+            .extend_ttl(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), MIN_TTL, TARGET_TTL);
+        required
+    }
+
+    /// Get contract version for upgrade tracking
+    pub fn version(e: &Env) -> u32 {
+        e.storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, CONTRACT_VERSION_KEY.as_bytes()))
+            .unwrap_or(CONTRACT_VERSION)
     }
 }
 
@@ -326,8 +350,12 @@ impl FungibleToken for TokenContract {
         }
         
         // Whitelist enforcement for KYC/MiCA compliance (only if required)
+        // Check both sender and recipient for stricter compliance
         let whitelist_required: bool = Self::is_whitelist_required(e);
         if whitelist_required {
+            if !Self::is_whitelisted(e, from.clone()) {
+                panic!("Sender not in whitelist");
+            }
             if !Self::is_whitelisted(e, to.clone()) {
                 panic!("Recipient not in whitelist");
             }
@@ -348,10 +376,17 @@ impl FungibleToken for TokenContract {
         }
         
         // Whitelist enforcement for KYC/MiCA compliance (only if required)
+        // Check spender, from, and to for stricter compliance
         let whitelist_required: bool = Self::is_whitelist_required(e);
         if whitelist_required {
+            if !Self::is_whitelisted(e, from.clone()) {
+                panic!("Sender not in whitelist");
+            }
             if !Self::is_whitelisted(e, to.clone()) {
                 panic!("Recipient not in whitelist");
+            }
+            if !Self::is_whitelisted(e, spender.clone()) {
+                panic!("Spender not in whitelist");
             }
         }
         
@@ -386,10 +421,27 @@ impl FungibleToken for TokenContract {
 
 #[contractimpl]
 impl FungibleBurnable for TokenContract {
+    /// Burn tokens from an account
+    /// 
+    /// Semantics:
+    /// - Burn operations permanently remove tokens from circulation, reducing total supply
+    /// - Burns do NOT reduce the minting cap (cap represents maximum possible supply, not current supply)
+    /// - Tokens that are burned cannot be recovered or re-minted without increasing supply
+    /// - This is used for deflationary mechanisms or to correct errors
+    /// - Burn operations are irreversible
     fn burn(e: &Env, from: Address, amount: i128) {
         if pausable::paused(e) {
             panic!("Contract is paused");
         }
+        
+        // Whitelist enforcement for KYC/MiCA compliance (only if required)
+        let whitelist_required: bool = Self::is_whitelist_required(e);
+        if whitelist_required {
+            if !Self::is_whitelisted(e, from.clone()) {
+                panic!("Sender not in whitelist");
+            }
+        }
+        
         Base::burn(e, &from, amount);
         
         // Emit burn event
@@ -399,10 +451,30 @@ impl FungibleBurnable for TokenContract {
         );
     }
 
+    /// Burn tokens from an account using allowance
+    /// 
+    /// Semantics:
+    /// - Burn operations permanently remove tokens from circulation, reducing total supply
+    /// - Burns do NOT reduce the minting cap (cap represents maximum possible supply, not current supply)
+    /// - Tokens that are burned cannot be recovered or re-minted without increasing supply
+    /// - This is used for deflationary mechanisms or to correct errors
+    /// - Burn operations are irreversible
     fn burn_from(e: &Env, spender: Address, from: Address, amount: i128) {
         if pausable::paused(e) {
             panic!("Contract is paused");
         }
+        
+        // Whitelist enforcement for KYC/MiCA compliance (only if required)
+        let whitelist_required: bool = Self::is_whitelist_required(e);
+        if whitelist_required {
+            if !Self::is_whitelisted(e, from.clone()) {
+                panic!("Sender not in whitelist");
+            }
+            if !Self::is_whitelisted(e, spender.clone()) {
+                panic!("Spender not in whitelist");
+            }
+        }
+        
         Base::burn_from(e, &spender, &from, amount);
         
         // Emit burn_from event

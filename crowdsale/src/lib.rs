@@ -12,6 +12,10 @@ use stellar_upgradeable::UpgradeableInternal;
 use stellar_upgradeable_macros::Upgradeable;
 use stellar_default_impl_macro::default_impl;
 
+// TTL constants for persistent storage (ledger-based)
+const MIN_TTL: u32 = 1_000_000;
+const TARGET_TTL: u32 = 1_500_000;
+
 // Storage keys
 const TOKEN_CONTRACT_KEY: &str = "token_contract";
 const TREASURY_KEY: &str = "treasury";
@@ -24,6 +28,10 @@ const TOTAL_SOLD_KEY: &str = "total_sold";
 const MIN_TOKENS_KEY: &str = "min_tokens";
 const WHITELIST_REQUIRED_KEY: &str = "whitelist_required";
 const TEST_MODE_KEY: &str = "test_mode";
+const CONTRACT_VERSION_KEY: &str = "contract_version";
+
+// Contract version - increment on upgrades
+const CONTRACT_VERSION: u32 = 1;
 
 #[derive(Clone)]
 #[contracttype]
@@ -91,14 +99,14 @@ impl<'a> OracleClient<'a> {
         Self { env, contract_id }
     }
 
-    pub fn price(&self, asset: &Asset, timestamp: u64) -> Option<PriceData> {
-        // Call SEP-40 price function
-        let res: PriceData = self.env.invoke_contract::<PriceData>(
+    pub fn lastprice(&self, asset: &Asset) -> Option<PriceData> {
+        // Call SEP-40 lastprice function for spot pricing
+        let res: Option<PriceData> = self.env.invoke_contract::<Option<PriceData>>(
             self.contract_id,
-            &Symbol::new(self.env, "price"),
-            (asset.clone(), timestamp).into_val(self.env),
+            &Symbol::new(self.env, "lastprice"),
+            (asset.clone(),).into_val(self.env),
         );
-        Some(res)
+        res
     }
 
     pub fn decimals(&self) -> u32 {
@@ -118,13 +126,8 @@ pub struct CrowdsaleContract;
 
 #[contractimpl]
 impl CrowdsaleContract {
-    /// Initialize the crowdsale contract (optional parameters for SDK compatibility)
-    pub fn __constructor(_e: &Env) {
-        // Don't set anything - will be initialized via initialize function
-    }
-
-    /// Initialize the crowdsale contract with actual parameters
-    pub fn initialize(
+    /// Initialize the crowdsale contract with owner, token contract, treasury, and whitelist settings
+    pub fn __constructor(
         e: &Env,
         owner: Address,
         token_contract: Address,
@@ -155,6 +158,11 @@ impl CrowdsaleContract {
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), &whitelist_required.unwrap_or(false));
+
+        // Set contract version for upgrade tracking
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, CONTRACT_VERSION_KEY.as_bytes()), &CONTRACT_VERSION);
     }
 
     /// Configure sale parameters (owner only)
@@ -170,16 +178,30 @@ impl CrowdsaleContract {
         global_cap: i128,
         min_tokens_received: i128,
     ) {
+        // Prevent mid-sale rewrites: check if tokens have already been sold
+        let total_sold: i128 = e
+            .storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, TOTAL_SOLD_KEY.as_bytes()))
+            .unwrap_or(0i128);
+        if total_sold > 0 {
+            panic!("Cannot reopen sale: tokens have already been sold");
+        }
+
         if end_time <= start_time {
             panic!("Invalid time range");
         }
-        
+
         if price_numerator <= 0 || price_denominator <= 0 {
             panic!("Invalid price");
         }
-        
+
         if global_cap <= 0 {
             panic!("Invalid cap");
+        }
+
+        if min_tokens_received < 0 {
+            panic!("Invalid min_tokens_received: cannot be negative");
         }
         
         // Store sale configuration
@@ -240,13 +262,17 @@ impl CrowdsaleContract {
     }
 
     /// Set test mode to skip token transfers (owner only, for testing)
+    /// 
+    /// WARNING: This function should only be used in testnet/development environments.
+    /// When enabled, token transfers and mint calls are skipped, which is useful for testing
+    /// without requiring full token contract setup. This should NEVER be enabled in production.
     #[only_owner]
     pub fn set_test_mode(e: &Env, _caller: Address, enabled: bool) {
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, TEST_MODE_KEY.as_bytes()), &enabled);
     }
-    
+
     /// Get test mode status
     pub fn is_test_mode(e: &Env) -> bool {
         e.storage()
@@ -340,9 +366,15 @@ impl CrowdsaleContract {
     /// Set whitelist status for buyer (owner only)
     #[only_owner]
     pub fn set_whitelist(e: &Env, _caller: Address, buyer: Address, whitelisted: bool) {
-        e.storage()
-            .persistent()
-            .set(&DataKey::Whitelist(buyer.clone()), &whitelisted);
+        if whitelisted {
+            e.storage()
+                .persistent()
+                .set(&DataKey::Whitelist(buyer.clone()), &true);
+        } else {
+            e.storage()
+                .persistent()
+                .remove(&DataKey::Whitelist(buyer.clone()));
+        }
 
         e.events().publish(
             (Symbol::new(e, "whitelist_updated"), buyer.clone()),
@@ -381,6 +413,23 @@ impl CrowdsaleContract {
         e.events().publish(
             (Symbol::new(e, "treasury_updated"),),
             new_treasury,
+        );
+    }
+
+    /// Emergency reset sale state (owner only, for recovery from bad state transitions)
+    /// WARNING: This should only be used in emergency situations to reset TOTAL_SOLD to 0
+    /// Use with caution as it affects the sale's progress tracking
+    #[only_owner]
+    pub fn emergency_reset_sale(e: &Env, _caller: Address) {
+        // Reset TOTAL_SOLD to 0
+        e.storage()
+            .persistent()
+            .set(&Bytes::from_slice(e, TOTAL_SOLD_KEY.as_bytes()), &0i128);
+
+        // Emit event for audit trail
+        e.events().publish(
+            (Symbol::new(e, "emergency_sale_reset"),),
+            true,
         );
     }
 
@@ -457,15 +506,33 @@ impl CrowdsaleContract {
 
                 // Create SEP-40 client and fetch price
                 let oracle_client = OracleClient::new(e, &oracle_address);
-                let price_data = oracle_client.price(&asset, e.ledger().timestamp());
+                let price_data = oracle_client.lastprice(&asset);
 
                 if price_data.is_none() {
                     panic!("Oracle price not available");
                 }
 
-                let oracle_price = price_data.unwrap().price;
+                let price_data = price_data.unwrap();
+                let oracle_price = price_data.price;
+                
+                // Staleness check: reject prices older than 1 hour (3600 seconds)
+                let current_time = e.ledger().timestamp();
+                if current_time.saturating_sub(price_data.timestamp) > 3600 {
+                    panic!("Oracle price too stale");
+                }
+                
+                // Zero price check before division
+                if oracle_price <= 0 {
+                    panic!("Invalid oracle price: must be positive");
+                }
+                
                 // Get oracle decimal precision
                 let oracle_decimals = oracle_client.decimals();
+                
+                // Exponent guard: prevent overflow from large decimals
+                if oracle_decimals >= 39 {
+                    panic!("Oracle decimals too large");
+                }
                 
                 // Convert payment amount to base currency using correct SEP-40 formula
                 // base_amount = (amount * 10^oracle_decimals) / oracle_price
@@ -614,27 +681,7 @@ impl CrowdsaleContract {
         );
     }
 
-    /// Finalize sale after end time (owner only)
-    #[only_owner]
-    pub fn finalize_sale(e: &Env, _caller: Address) {
-        let current_time = e.ledger().timestamp();
-        let end_time: u64 = e
-            .storage()
-            .persistent()
-            .get(&Bytes::from_slice(e, SALE_END_KEY.as_bytes()))
-            .unwrap_or_else(|| panic!("Sale not configured"));
-        
-        if current_time < end_time {
-            panic!("Sale not ended");
-        }
-
-        e.events()
-            .publish((Symbol::new(e, "sale_finalized"),), end_time);
-
-        // Sale finalization logic can be added here
-        // e.g., distribute remaining tokens, lock contract, etc.
-    }
-
+    
     // ========== View Functions ==========
 
     pub fn get_sale_config(e: &Env) -> SaleConfig {
@@ -694,10 +741,22 @@ impl CrowdsaleContract {
     }
 
     pub fn is_whitelist_required(e: &Env) -> bool {
-        e.storage()
+        let required = e.storage()
             .persistent()
             .get(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()))
-            .unwrap_or(false)
+            .unwrap();
+        e.storage()
+            .persistent()
+            .extend_ttl(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), MIN_TTL, TARGET_TTL);
+        required
+    }
+
+    /// Get contract version for upgrade tracking
+    pub fn version(e: &Env) -> u32 {
+        e.storage()
+            .persistent()
+            .get(&Bytes::from_slice(e, CONTRACT_VERSION_KEY.as_bytes()))
+            .unwrap_or(CONTRACT_VERSION)
     }
 
     pub fn is_asset_supported(e: &Env, asset_contract: Address) -> bool {
@@ -724,17 +783,25 @@ impl CrowdsaleContract {
     }
 
     pub fn token_contract(e: &Env) -> Address {
-        e.storage()
+        let token_contract = e.storage()
             .persistent()
             .get(&Bytes::from_slice(e, TOKEN_CONTRACT_KEY.as_bytes()))
-            .unwrap()
+            .unwrap();
+        e.storage()
+            .persistent()
+            .extend_ttl(&Bytes::from_slice(e, TOKEN_CONTRACT_KEY.as_bytes()), MIN_TTL, TARGET_TTL);
+        token_contract
     }
 
     pub fn treasury(e: &Env) -> Address {
-        e.storage()
+        let treasury = e.storage()
             .persistent()
             .get(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()))
-            .unwrap()
+            .unwrap();
+        e.storage()
+            .persistent()
+            .extend_ttl(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()), MIN_TTL, TARGET_TTL);
+        treasury
     }
 
     /// Calculate tokens for a given payment amount using the asset's rate
@@ -742,6 +809,21 @@ impl CrowdsaleContract {
         if payment_amount <= 0 {
             return 0i128;
         }
+
+        // Get payment asset decimals for normalization
+        let payment_decimals: u32 = {
+            let token_client = token::Client::new(e, &asset_contract);
+            token_client.decimals()
+        };
+
+        // Normalize payment amount to 18 decimal places (standard precision)
+        let normalized_amount = if payment_decimals < 18 {
+            payment_amount * 10i128.pow(18 - payment_decimals)
+        } else if payment_decimals > 18 {
+            payment_amount / 10i128.pow(payment_decimals - 18)
+        } else {
+            payment_amount
+        };
 
         // Calculate tokens based on rate source (same logic as buy())
         match e.storage().persistent().get::<DataKey, RateSource>(
@@ -765,18 +847,36 @@ impl CrowdsaleContract {
 
                 // Create SEP-40 client and fetch price
                 let oracle_client = OracleClient::new(e, &oracle_address);
-                let price_data = oracle_client.price(&asset, e.ledger().timestamp());
+                let price_data = oracle_client.lastprice(&asset);
 
                 if price_data.is_none() {
                     return 0i128;
                 }
 
-                let oracle_price = price_data.unwrap().price;
+                let price_data = price_data.unwrap();
+                let oracle_price = price_data.price;
+
+                // Staleness check: reject prices older than 1 hour (3600 seconds)
+                let current_time = e.ledger().timestamp();
+                if current_time.saturating_sub(price_data.timestamp) > 3600 {
+                    return 0i128;
+                }
+
+                // Zero price check before division
+                if oracle_price <= 0 {
+                    return 0i128;
+                }
+
                 // Get oracle decimal precision
                 let oracle_decimals = oracle_client.decimals();
-                
-                // Convert payment amount to base currency using correct SEP-40 formula
-                let base_amount = (payment_amount * 10i128.pow(oracle_decimals)) / oracle_price;
+
+                // Exponent guard: prevent overflow from large decimals
+                if oracle_decimals >= 39 {
+                    return 0i128;
+                }
+
+                // Convert normalized payment amount to base currency using correct SEP-40 formula
+                let base_amount = (normalized_amount * 10i128.pow(oracle_decimals)) / oracle_price;
                 
                 // Apply fixed offering price (price_num/price_den) to calculate tokens
                 let price_num: i128 = e.storage().persistent()
@@ -793,7 +893,7 @@ impl CrowdsaleContract {
                 if let Some(asset_rate) = e.storage().persistent()
                     .get::<DataKey, AssetRate>(&DataKey::AssetRate(asset_contract))
                 {
-                    (payment_amount * asset_rate.rate_numerator) / asset_rate.rate_denominator
+                    (normalized_amount * asset_rate.rate_numerator) / asset_rate.rate_denominator
                 } else {
                     // Fallback to global price
                     let price_num: i128 = e.storage().persistent()
@@ -807,7 +907,7 @@ impl CrowdsaleContract {
                         return 0i128;
                     }
 
-                    (payment_amount * price_num) / price_den
+                    (normalized_amount * price_num) / price_den
                 }
             }
         }

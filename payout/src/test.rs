@@ -12,8 +12,7 @@ use soroban_sdk::{
 
 fn create_token_contract<'a>(e: &Env, admin: &Address) -> token::Client<'a> {
     let sac = e.register_stellar_asset_contract_v2(admin.clone());
-    let contract_address = sac.address();
-    token::Client::new(e, &contract_address)
+    token::Client::new(e, &sac.address())
 }
 
 fn create_payout_contract<'a>(
@@ -239,19 +238,19 @@ fn test_whitelist_system() {
     assert_eq!(client.require_whitelist(), false);
     
     // Add to whitelist
-    client.add_to_whitelist(&admin, &account);
+    client.add_to_whitelist(&account);
     assert_eq!(client.is_whitelisted(&account), true);
     
     // Remove from whitelist
-    client.remove_from_whitelist(&admin, &account);
+    client.remove_from_whitelist(&account);
     assert_eq!(client.is_whitelisted(&account), false);
     
     // Enable whitelist requirement
-    client.update_whitelist_requirement(&admin, &true);
+    client.update_whitelist_requirement(&true);
     assert_eq!(client.require_whitelist(), true);
     
     // Disable whitelist requirement
-    client.update_whitelist_requirement(&admin, &false);
+    client.update_whitelist_requirement(&false);
     assert_eq!(client.require_whitelist(), false);
 }
 
@@ -261,7 +260,8 @@ fn test_deployment_with_whitelist_required_true() {
     e.mock_all_auths();
     
     let admin = Address::generate(&e);
-    let token = create_token_contract(&e, &admin);
+    let sac = e.register_stellar_asset_contract_v2(admin.clone());
+    let token = token::Client::new(&e, &sac.address());
     let contract_id = e.register(PayoutContract, (&admin, &token.address, Some(true)));
     let client = PayoutContractClient::new(&e, &contract_id);
     
@@ -275,7 +275,8 @@ fn test_deployment_with_whitelist_required_false() {
     e.mock_all_auths();
     
     let admin = Address::generate(&e);
-    let token = create_token_contract(&e, &admin);
+    let sac = e.register_stellar_asset_contract_v2(admin.clone());
+    let token = token::Client::new(&e, &sac.address());
     let contract_id = e.register(PayoutContract, (&admin, &token.address, Some(false)));
     let client = PayoutContractClient::new(&e, &contract_id);
     
@@ -289,7 +290,8 @@ fn test_deployment_default_whitelist_required() {
     e.mock_all_auths();
     
     let admin = Address::generate(&e);
-    let token = create_token_contract(&e, &admin);
+    let sac = e.register_stellar_asset_contract_v2(admin.clone());
+    let token = token::Client::new(&e, &sac.address());
     let contract_id = e.register(PayoutContract, (&admin, &token.address, None::<bool>));
     let client = PayoutContractClient::new(&e, &contract_id);
     
@@ -355,10 +357,10 @@ fn test_get_required_funding_amount() {
     let balances = Vec::from_array(&e, [1000i128, 2000i128, 3000i128]);
     let methods = Vec::from_array(&e, [PayoutMethod::Claim, PayoutMethod::Automatic, PayoutMethod::Bank]);
     
-    client.set_investor_balances(&admin, &distribution_id, &investors, &balances, &methods);
+    client.set_investor_balances(&distribution_id, &investors, &balances, &methods);
     
     // Set total distribution amount to 10000
-    client.set_total_distribution_amount(&admin, &distribution_id, &10000);
+    client.set_total_distribution_amount(&distribution_id, &10000);
     
     // Required funding calculation:
     // - Claim + Automatic snapshot balance = 1000 + 2000 = 3000
@@ -387,4 +389,48 @@ fn test_get_distribution_summary() {
     assert_eq!(summary.2, token.address); // payout_token
     assert_eq!(summary.5, 0); // investor_count
     assert_eq!(summary.6, DistributionState::Setup); // state
+}
+
+#[test]
+fn test_claim_payout_flow() {
+    let e = Env::default();
+    e.mock_all_auths();
+    
+    let admin = Address::generate(&e);
+    let investor = Address::generate(&e);
+    let sac = e.register_stellar_asset_contract_v2(admin.clone());
+    let token = token::Client::new(&e, &sac.address());
+    let token_admin = token::StellarAssetClient::new(&e, &sac.address());
+    let client = create_payout_contract(&e, &token);
+    
+    // Create distribution
+    let distribution_id = client.create_distribution(&0, &token.address);
+    
+    // Set investor balance with Claim method
+    let investors = Vec::from_array(&e, [investor.clone()]);
+    let balances = Vec::from_array(&e, [1000i128]);
+    let methods = Vec::from_array(&e, [PayoutMethod::Claim]);
+    client.set_investor_balances(&distribution_id, &investors, &balances, &methods);
+    
+    // Set total distribution amount
+    client.set_total_distribution_amount(&distribution_id, &1000);
+    
+    // Advance to Compute state
+    client.advance_distribution_state(&distribution_id, &DistributionState::Compute);
+    
+    // Fund distribution
+    token_admin.mint(&admin, &1000);
+    client.fund_payout_token(&distribution_id, &1000, &token.address);
+    
+    // Compute payout amounts (requires Compute state)
+    client.compute_payout_amounts(&distribution_id, &1000);
+    
+    // Advance to Payout state
+    client.advance_distribution_state(&distribution_id, &DistributionState::Payout);
+    
+    // Claim payout
+    client.claim_payout(&investor, &distribution_id);
+    
+    // Verify payout amount was claimed
+    assert_eq!(client.get_payout_amount(&distribution_id, &investor), 1000);
 }

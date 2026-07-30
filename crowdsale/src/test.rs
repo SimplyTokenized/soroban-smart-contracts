@@ -19,13 +19,15 @@ fn create_crowdsale_contract<'a>(
     e: &'a Env,
     token: &token::Client<'a>,
 ) -> CrowdsaleContractClient<'a> {
-    let contract_id = e.register(CrowdsaleContract, ());
-    let client = CrowdsaleContractClient::new(e, &contract_id);
-    
-    // Initialize the contract with owner and treasury
     let owner = Address::generate(e);
     let treasury = Address::generate(e);
-    client.initialize(&owner, &token.address, &treasury, &None);
+    let contract_id = e.register(CrowdsaleContract, (
+        &owner,
+        &token.address,
+        &treasury,
+        None::<bool>,
+    ));
+    let client = CrowdsaleContractClient::new(e, &contract_id);
     
     client
 }
@@ -530,12 +532,15 @@ fn test_deployment_with_whitelist_required_true() {
     
     let admin = Address::generate(&e);
     let token = create_token_contract(&e, &admin);
-    let contract_id = e.register(CrowdsaleContract, ());
-    let client = CrowdsaleContractClient::new(&e, &contract_id);
-    
     let owner = Address::generate(&e);
     let treasury = Address::generate(&e);
-    client.initialize(&owner, &token.address, &treasury, &Some(true));
+    let contract_id = e.register(CrowdsaleContract, (
+        &owner,
+        &token.address,
+        &treasury,
+        Some(true),
+    ));
+    let client = CrowdsaleContractClient::new(&e, &contract_id);
     
     // Verify whitelist_required is set to true
     assert_eq!(client.is_whitelist_required(), true);
@@ -548,12 +553,15 @@ fn test_deployment_with_whitelist_required_false() {
     
     let admin = Address::generate(&e);
     let token = create_token_contract(&e, &admin);
-    let contract_id = e.register(CrowdsaleContract, ());
-    let client = CrowdsaleContractClient::new(&e, &contract_id);
-    
     let owner = Address::generate(&e);
     let treasury = Address::generate(&e);
-    client.initialize(&owner, &token.address, &treasury, &Some(false));
+    let contract_id = e.register(CrowdsaleContract, (
+        &owner,
+        &token.address,
+        &treasury,
+        Some(false),
+    ));
+    let client = CrowdsaleContractClient::new(&e, &contract_id);
     
     // Verify whitelist_required is set to false
     assert_eq!(client.is_whitelist_required(), false);
@@ -566,12 +574,15 @@ fn test_deployment_default_whitelist_required() {
     
     let admin = Address::generate(&e);
     let token = create_token_contract(&e, &admin);
-    let contract_id = e.register(CrowdsaleContract, ());
-    let client = CrowdsaleContractClient::new(&e, &contract_id);
-    
     let owner = Address::generate(&e);
     let treasury = Address::generate(&e);
-    client.initialize(&owner, &token.address, &treasury, &None);
+    let contract_id = e.register(CrowdsaleContract, (
+        &owner,
+        &token.address,
+        &treasury,
+        None::<bool>,
+    ));
+    let client = CrowdsaleContractClient::new(&e, &contract_id);
     
     // Verify default is false
     assert_eq!(client.is_whitelist_required(), false);
