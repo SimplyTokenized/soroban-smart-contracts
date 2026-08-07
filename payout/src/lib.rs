@@ -876,6 +876,7 @@ impl PayoutContract {
     #[only_owner]
     pub fn fund_payout_token(
         e: &Env,
+        funder: Address,
         distribution_id: u64,
         amount: i128,
         token: Address,
@@ -895,11 +896,10 @@ impl PayoutContract {
             panic!("Token does not match distribution payout token");
         }
 
-        // Transfer tokens from caller to contract
+        // Transfer tokens from funder to contract
+        funder.require_auth();
         let token_client = token::Client::new(e, &token);
-        let caller = e.current_contract_address(); // For now, use contract address as caller
-        caller.require_auth();
-        token_client.transfer(&caller, &e.current_contract_address(), &amount);
+        token_client.transfer(&funder, &e.current_contract_address(), &amount);
 
         // Update distribution funding
         distribution.payout_token_amount += amount;

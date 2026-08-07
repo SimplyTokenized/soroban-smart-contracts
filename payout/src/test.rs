@@ -420,7 +420,7 @@ fn test_claim_payout_flow() {
     
     // Fund distribution
     token_admin.mint(&admin, &1000);
-    client.fund_payout_token(&distribution_id, &1000, &token.address);
+    client.fund_payout_token(&admin, &distribution_id, &1000, &token.address);
     
     // Compute payout amounts (requires Compute state)
     client.compute_payout_amounts(&distribution_id, &1000);
