@@ -28,3 +28,4 @@ stellar-default-impl-macro = { git = "https://github.com/OpenZeppelin/stellar-co
 
 [dev-dependencies]
 soroban-sdk = { version = "22.0.8", features = ["testutils"] }
+cargo-llvm-cov = { workspace = true }

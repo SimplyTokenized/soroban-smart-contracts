@@ -243,10 +243,12 @@ impl TokenContract {
         let is_minter = e.storage()
             .persistent()
             .get(&DataKey::MinterRole(account.clone()))
-            .unwrap(); // Panic on expiry for compliance-critical key
-        e.storage()
-            .persistent()
-            .extend_ttl(&DataKey::MinterRole(account), MIN_TTL, TARGET_TTL);
+            .unwrap_or(false); // Return false if not minter instead of panicking
+        if is_minter {
+            e.storage()
+                .persistent()
+                .extend_ttl(&DataKey::MinterRole(account), MIN_TTL, TARGET_TTL);
+        }
         is_minter
     }
 
@@ -255,10 +257,12 @@ impl TokenContract {
         let whitelisted = e.storage()
             .persistent()
             .get(&DataKey::Whitelist(account.clone()))
-            .unwrap(); // Panic on expiry for compliance-critical key
-        e.storage()
-            .persistent()
-            .extend_ttl(&DataKey::Whitelist(account), MIN_TTL, TARGET_TTL);
+            .unwrap_or(false); // Return false if not whitelisted instead of panicking
+        if whitelisted {
+            e.storage()
+                .persistent()
+                .extend_ttl(&DataKey::Whitelist(account), MIN_TTL, TARGET_TTL);
+        }
         whitelisted
     }
 
@@ -491,6 +495,14 @@ impl FungibleBurnable for TokenContract {
 impl UpgradeableInternal for TokenContract {
     fn _require_auth(e: &Env, _operator: &Address) {
         ownable::enforce_owner_auth(e);
+    }
+}
+
+#[cfg(test)]
+#[contractimpl]
+impl TokenContract {
+    pub fn _test_clear_cap(e: &Env) {
+        e.storage().persistent().remove(&DataKey::Cap);
     }
 }
 

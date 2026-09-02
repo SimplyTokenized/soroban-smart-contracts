@@ -978,4 +978,23 @@ impl UpgradeableInternal for CrowdsaleContract {
 }
 
 #[cfg(test)]
+#[contractimpl]
+impl CrowdsaleContract {
+    pub fn _test_oracle_rate_only(e: &Env, asset_contract: Address) {
+        e.storage()
+            .persistent()
+            .set(&DataKey::AssetRateSource(asset_contract), &RateSource::Oracle);
+    }
+
+    pub fn _test_oracle_addr_only(e: &Env, asset_contract: Address, oracle_address: Address) {
+        e.storage()
+            .persistent()
+            .set(&DataKey::AssetRateSource(asset_contract.clone()), &RateSource::Oracle);
+        e.storage()
+            .persistent()
+            .set(&DataKey::OracleAddress(asset_contract), &oracle_address);
+    }
+}
+
+#[cfg(test)]
 mod test;

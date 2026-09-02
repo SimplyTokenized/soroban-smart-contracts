@@ -44,3 +44,23 @@ rust-toolchain
 token/test_snapshots
 crowdsale/test_snapshots
 payout/test_snapshots
+docs/review_response.tex
+
+# coverage files
+
+coverage_lcov.txt
+coverage_lcov2.txt
+coverage_lcov3.txt
+coverage_lcov4.txt
+coverage_lcov5.txt
+coverage_lcov6.txt
+coverage_lcov7.txt
+coverage_lcov8.txt
+coverage_lcov9.txt
+coverage_lcov10.txt
+coverage_lcov11.txt
+coverage_lcov12.txt
+coverage_lcov13.txt
+coverage.json
+coverage/
+

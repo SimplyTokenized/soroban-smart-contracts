@@ -6,6 +6,9 @@ members = [
 ]
 resolver = "2"
 
+[workspace.dependencies]
+cargo-llvm-cov = "0.5"
+
 [profile.release]
 opt-level = "z"  # Optimize for size
 overflow-checks = true
