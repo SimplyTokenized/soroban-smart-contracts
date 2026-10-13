@@ -1,0 +1,26 @@
+{
+  "name": "Token Supply & Policy Ops (Mainnet)",
+  "paused": false,
+  "networks": ["stellar_mainnet"],
+  "addresses": [
+    { "address": "<TOKEN_CONTRACT_ID_MAINNET>" }
+  ],
+  "match_conditions": {
+    "functions": [
+      { "signature": "mint(Address,Address,I128)", "expression": null },
+      { "signature": "set_minter(Address,Address,Bool)", "expression": null },
+      { "signature": "set_cap(Address,I128)", "expression": null },
+      { "signature": "set_whitelist(Address,Address,Bool)", "expression": null },
+      { "signature": "set_whitelist_required(Address,Bool)", "expression": null },
+      { "signature": "transfer(Address,Address,I128)", "expression": "amount > 1000000000000" },
+      { "signature": "burn(Address,I128)", "expression": "amount > 1000000000000" },
+      { "signature": "burn_from(Address,Address,I128)", "expression": "amount > 1000000000000" }
+    ],
+    "events": [],
+    "transactions": [
+      { "status": "Success", "expression": null }
+    ]
+  },
+  "trigger_conditions": [],
+  "triggers": ["stellar_p2_slack"]
+}

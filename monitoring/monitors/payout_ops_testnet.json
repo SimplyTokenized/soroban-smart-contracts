@@ -1,0 +1,35 @@
+{
+  "name": "Payout Lifecycle & Funds (Testnet)",
+  "paused": false,
+  "networks": ["stellar_testnet"],
+  "addresses": [
+    { "address": "<PAYOUT_CONTRACT_ID_TESTNET>" }
+  ],
+  "match_conditions": {
+    "functions": [
+      { "signature": "create_distribution(U64,Address)", "expression": null },
+      { "signature": "create_distribution_with_mode(U64,Address,DistributionMode)", "expression": null },
+      { "signature": "advance_distribution_state(U64,DistributionState)", "expression": null },
+      { "signature": "withdraw_unclaimed(U64)", "expression": null },
+      { "signature": "set_investor_balances(U64,Vec<Address>,Vec<I128>,Vec<PayoutMethod>)", "expression": null },
+      { "signature": "set_investor_balance(U64,Address,I128,PayoutMethod)", "expression": null },
+      { "signature": "take_onchain_snapshot(U64,Vec<Address>,Vec<PayoutMethod>)", "expression": null },
+      { "signature": "fund_payout_token(Address,U64,I128,Address)", "expression": null },
+      { "signature": "set_total_distribution_amount(U64,I128)", "expression": null },
+      { "signature": "compute_payout_amounts(U64,I128)", "expression": null },
+      { "signature": "set_manual_payout_amounts(U64,Vec<Address>,Vec<I128>)", "expression": null },
+      { "signature": "claim_payout(Address,U64)", "expression": null },
+      { "signature": "batch_distribute_automatic(U64,Vec<Address>)", "expression": null },
+      { "signature": "batch_mark_payout_as_paid(U64,Vec<Address>)", "expression": null },
+      { "signature": "add_to_whitelist(Address)", "expression": null },
+      { "signature": "remove_from_whitelist(Address)", "expression": null },
+      { "signature": "update_whitelist_requirement(Bool)", "expression": null }
+    ],
+    "events": [],
+    "transactions": [
+      { "status": "Success", "expression": null }
+    ]
+  },
+  "trigger_conditions": [],
+  "triggers": ["stellar_p3_slack"]
+}

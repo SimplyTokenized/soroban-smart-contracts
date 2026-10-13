@@ -1,0 +1,29 @@
+{
+  "name": "Admin Critical Functions (Mainnet)",
+  "paused": false,
+  "networks": ["stellar_mainnet"],
+  "addresses": [
+    { "address": "<TOKEN_CONTRACT_ID_MAINNET>" },
+    { "address": "<CROWDSALE_CONTRACT_ID_MAINNET>" },
+    { "address": "<PAYOUT_CONTRACT_ID_MAINNET>" }
+  ],
+  "match_conditions": {
+    "functions": [
+      { "signature": "upgrade(Bytes32,Address)", "expression": null },
+      { "signature": "transfer_ownership(Address,U32)", "expression": null },
+      { "signature": "accept_ownership()", "expression": null },
+      { "signature": "renounce_ownership()", "expression": null },
+      { "signature": "pause(Address)", "expression": null },
+      { "signature": "unpause(Address)", "expression": null },
+      { "signature": "emergency_reset_sale(Address)", "expression": null },
+      { "signature": "set_test_mode(Address,Bool)", "expression": null },
+      { "signature": "update_treasury(Address,Address)", "expression": null }
+    ],
+    "events": [],
+    "transactions": [
+      { "status": "Success", "expression": null }
+    ]
+  },
+  "trigger_conditions": [],
+  "triggers": ["stellar_p1_slack"]
+}

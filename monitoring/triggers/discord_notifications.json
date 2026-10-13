@@ -1,0 +1,44 @@
+{
+  "stellar_p1_discord": {
+    "name": "P1 Critical - Discord",
+    "trigger_type": "discord",
+    "config": {
+      "discord_url": {
+        "type": "environment",
+        "value": "DISCORD_WEBHOOK_URL"
+      },
+      "message": {
+        "title": "[P1 CRITICAL] ${monitor.name}",
+        "body": "Tx: ${transaction.hash} — investigate immediately. https://stellar.expert/explorer/public/tx/${transaction.hash}"
+      }
+    }
+  },
+  "stellar_p2_discord": {
+    "name": "P2 Elevated - Discord",
+    "trigger_type": "discord",
+    "config": {
+      "discord_url": {
+        "type": "environment",
+        "value": "DISCORD_WEBHOOK_URL"
+      },
+      "message": {
+        "title": "[P2] ${monitor.name}",
+        "body": "Tx: ${transaction.hash} — verify against governance records. https://stellar.expert/explorer/public/tx/${transaction.hash}"
+      }
+    }
+  },
+  "stellar_p3_discord": {
+    "name": "P3 Info - Discord",
+    "trigger_type": "discord",
+    "config": {
+      "discord_url": {
+        "type": "environment",
+        "value": "DISCORD_WEBHOOK_URL"
+      },
+      "message": {
+        "title": "[P3] ${monitor.name}",
+        "body": "Tx: ${transaction.hash} — https://stellar.expert/explorer/public/tx/${transaction.hash}"
+      }
+    }
+  }
+}

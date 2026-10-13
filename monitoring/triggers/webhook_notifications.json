@@ -1,0 +1,64 @@
+{
+  "stellar_p1_webhook": {
+    "name": "P1 Critical - Webhook",
+    "trigger_type": "webhook",
+    "config": {
+      "url": {
+        "type": "environment",
+        "value": "ALERT_WEBHOOK_URL"
+      },
+      "method": "POST",
+      "secret": {
+        "type": "environment",
+        "value": "ALERT_WEBHOOK_SECRET"
+      },
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "message": {
+        "title": "[P1 CRITICAL] ${monitor.name}",
+        "body": "Tx: ${transaction.hash} — investigate immediately."
+      }
+    }
+  },
+  "stellar_p2_webhook": {
+    "name": "P2 Elevated - Webhook",
+    "trigger_type": "webhook",
+    "config": {
+      "url": {
+        "type": "environment",
+        "value": "ALERT_WEBHOOK_URL"
+      },
+      "method": "POST",
+      "secret": {
+        "type": "environment",
+        "value": "ALERT_WEBHOOK_SECRET"
+      },
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "message": {
+        "title": "[P2] ${monitor.name}",
+        "body": "Tx: ${transaction.hash} — verify against governance records."
+      }
+    }
+  },
+  "stellar_p3_webhook": {
+    "name": "P3 Info - Webhook",
+    "trigger_type": "webhook",
+    "config": {
+      "url": {
+        "type": "environment",
+        "value": "ALERT_WEBHOOK_URL"
+      },
+      "method": "POST",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "message": {
+        "title": "[P3] ${monitor.name}",
+        "body": "Tx: ${transaction.hash}"
+      }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "Failed Transactions on Our Contracts (Testnet)",
+  "paused": false,
+  "networks": ["stellar_testnet"],
+  "addresses": [
+    { "address": "<TOKEN_CONTRACT_ID_TESTNET>" },
+    { "address": "<CROWDSALE_CONTRACT_ID_TESTNET>" },
+    { "address": "<PAYOUT_CONTRACT_ID_TESTNET>" }
+  ],
+  "match_conditions": {
+    "functions": [],
+    "events": [],
+    "transactions": [
+      {
+        "status": "Failure",
+        "expression": "to == '<TOKEN_CONTRACT_ID_TESTNET>' OR to == '<CROWDSALE_CONTRACT_ID_TESTNET>' OR to == '<PAYOUT_CONTRACT_ID_TESTNET>'"
+      }
+    ]
+  },
+  "trigger_conditions": [],
+  "triggers": ["stellar_p3_slack"]
+}

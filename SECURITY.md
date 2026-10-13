@@ -121,6 +121,8 @@ Before deploying to mainnet, ensure the following items are completed:
 - [ ] **Deploy to testnet** and run full integration tests
 - [ ] **Document all contract IDs** and transaction hashes
 - [ ] **Prepare incident response plan** for emergency situations
+- [ ] **Owner accounts configured as multisig** per [GOVERNANCE.md](GOVERNANCE.md)
+- [ ] **Monitoring deployed** — OpenZeppelin Monitor + uptime checks per [docs/MONITORING.md](docs/MONITORING.md) and [monitoring/](monitoring/README.md)
 
 ### Audit History
 - [Date]: Initial security audit by [Auditor]

@@ -1,0 +1,28 @@
+{
+  "name": "Crowdsale Config & Purchases (Testnet)",
+  "paused": false,
+  "networks": ["stellar_testnet"],
+  "addresses": [
+    { "address": "<CROWDSALE_CONTRACT_ID_TESTNET>" }
+  ],
+  "match_conditions": {
+    "functions": [
+      { "signature": "open_sale(Address,U64,U64,I128,I128,I128,I128)", "expression": null },
+      { "signature": "support_asset(Address,Address,Bool)", "expression": null },
+      { "signature": "set_asset_rate(Address,Address,I128,I128,U32)", "expression": null },
+      { "signature": "remove_asset_rate(Address,Address)", "expression": null },
+      { "signature": "set_asset_oracle(Address,Address,Address,Asset)", "expression": null },
+      { "signature": "set_asset_manual(Address,Address)", "expression": null },
+      { "signature": "set_whitelist(Address,Address,Bool)", "expression": null },
+      { "signature": "set_whitelist_required(Address,Bool)", "expression": null },
+      { "signature": "set_user_cap(Address,Address,I128)", "expression": null },
+      { "signature": "buy(Address,Address,I128)", "expression": "amount > 1000000000000" }
+    ],
+    "events": [],
+    "transactions": [
+      { "status": "Success", "expression": null }
+    ]
+  },
+  "trigger_conditions": [],
+  "triggers": ["stellar_p3_slack"]
+}

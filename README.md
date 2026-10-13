@@ -14,23 +14,26 @@ This repository contains three interconnected smart contracts built with [Soroba
 
 ```text
 .
-├── contracts/
-│   ├── token/              # Fungible token contract
-│   │   ├── src/
-│   │   │   ├── lib.rs
-│   │   │   └── test.rs
-│   │   └── Cargo.toml
-│   ├── crowdsale/          # Token crowdsale contract
-│   │   ├── src/
-│   │   │   ├── lib.rs
-│   │   │   └── test.rs
-│   │   └── Cargo.toml
-│   └── payout/             # Payout distribution contract
-│       ├── src/
-│       │   ├── lib.rs
-│       │   └── test.rs
-│       └── Cargo.toml
+├── token/                  # Fungible token contract
+│   ├── src/
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   └── Cargo.toml
+├── crowdsale/              # Token crowdsale contract
+│   ├── src/
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   └── Cargo.toml
+├── payout/                 # Payout distribution contract
+│   ├── src/
+│   │   ├── lib.rs
+│   │   └── test.rs
+│   └── Cargo.toml
+├── docs/                   # Developer documentation & API references
+├── monitoring/             # OpenZeppelin Monitor + uptime configs
 ├── Cargo.toml              # Workspace configuration
+├── GOVERNANCE.md           # Governance model & admin procedures
+├── SECURITY.md             # Security policy & mainnet checklist
 └── README.md
 ```
 
@@ -88,17 +91,17 @@ cargo install --locked stellar-cli@latest
 
 2. **Build all contracts**
    ```bash
-   make build
+   cargo build --release --target wasm32v1-none
    ```
    
-   Or build a specific contract:
+   Or build a specific contract (each crate has a Makefile using `stellar contract build`):
    ```bash
    cd token && make build
    ```
 
 ## Development
 
-### Available Commands
+### Available Commands (per contract, run inside `token/`, `crowdsale/`, or `payout/`)
 
 - `make` or `make all`: Run tests for the contract
 - `make test`: Build and run tests
@@ -215,38 +218,38 @@ Automated distribution system:
 
 ### Local Testing (Standalone Network)
 
-1. **Start local Soroban network**
+1. **Start a local network** (Stellar CLI ≥ v21):
    ```bash
-   soroban network start standalone
+   stellar container start local
    ```
 
 2. **Deploy a contract**
    ```bash
-   soroban contract deploy \
+   stellar contract deploy \
      --wasm target/wasm32v1-none/release/token.wasm \
-     --network standalone
+     --source local-deployer \
+     --network local
    ```
 
 ### Testnet Deployment
 
 1. **Configure Testnet**
    ```bash
-   sSEP-40 Oracle**: v1.4.0 (for oracle price feeds)
-- **oroban network add testnet \
+   stellar network add testnet \
      --rpc-url https://soroban-testnet.stellar.org:443 \
      --network-passphrase "Test SDF Network ; September 2015"
    ```
 
 2. **Create and fund an identity**
    ```bash
-   soroban keys generate deployer --network testnet
-   soroban keys address deployer
+   stellar keys generate deployer --network testnet
+   stellar keys address deployer
    # Fund the address using Stellar Laboratory or Friendbot
    ```
 
 3. **Deploy contract**
    ```bash
-   soroban contract deploy \
+   stellar contract deploy \
      --wasm target/wasm32v1-none/release/token.wasm \
      --source deployer \
      --network testnet
@@ -254,30 +257,42 @@ Automated distribution system:
 
 ### Mainnet Deployment
 
-⚠️ **Warning**: Ensure thorough testing before mainnet deployment.
+⚠️ **Warning**: Complete the mainnet checklist in [SECURITY.md](SECURITY.md) and
+the owner-multisig setup in [GOVERNANCE.md](GOVERNANCE.md) before deploying.
 
 ```bash
-soroban network add mainnet \
-  --rpc-url https://soroban-rpc.mainnet.stellar.gateway.fm \
+stellar network add mainnet \
+  --rpc-url https://mainnet.sorobanrpc.com \
   --network-passphrase "Public Global Stellar Network ; September 2015"
 
-soroban contract deploy \
+stellar contract deploy \
   --wasm target/wasm32v1-none/release/token.wasm \
   --source mainnet-deployer \
   --network mainnet
 ```
 
+For the full deploy-order/wiring/verify procedure see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
 ## Dependencies
 
 - **Soroban SDK**: v22.0.8
-- **OpenZeppelin Stellar Contracts**:
-  - stellar-tokens: v0.4.1
-  - stellar-macros: v0.4.1
-  - stellar-access: v0.4.1
-  - stellar-ownable: v0.3.0
-  - stellar-pausable: v0.3.0
-  - stellar-upgradeable: v0.3.0
-  - stellar-non-fungible: v0.3.0
+- **OpenZeppelin Stellar Contracts** (tag `v0.3.0`):
+  - stellar-fungible (token only)
+  - stellar-ownable + stellar-ownable-macro
+  - stellar-pausable + stellar-pausable-macros
+  - stellar-upgradeable + stellar-upgradeable-macros
+  - stellar-default-impl-macro
+
+## Documentation
+
+- **[docs/](docs/README.md)** — architecture, full API references per contract
+  ([token](docs/contracts/token.md), [crowdsale](docs/contracts/crowdsale.md),
+  [payout](docs/contracts/payout.md)), integration & deployment guides
+- **[GOVERNANCE.md](GOVERNANCE.md)** — governance model: roles, multisig
+  administration, change/upgrade/incident procedures (OpenZeppelin-aligned)
+- **[SECURITY.md](SECURITY.md)** — security policy & mainnet deployment checklist
+- **[monitoring/](monitoring/README.md)** — OpenZeppelin Monitor + uptime
+  configs for on-chain alerting and uptime tracking
 
 ## License
 

@@ -1,0 +1,44 @@
+{
+  "stellar_p1_slack": {
+    "name": "P1 Critical - Slack",
+    "trigger_type": "slack",
+    "config": {
+      "slack_url": {
+        "type": "environment",
+        "value": "SLACK_WEBHOOK_URL"
+      },
+      "message": {
+        "title": "[P1 CRITICAL] ${monitor.name}",
+        "body": "Tx: ${transaction.hash}\n${monitor.name} matched — investigate immediately. https://stellar.expert/explorer/public/tx/${transaction.hash}"
+      }
+    }
+  },
+  "stellar_p2_slack": {
+    "name": "P2 Elevated - Slack",
+    "trigger_type": "slack",
+    "config": {
+      "slack_url": {
+        "type": "environment",
+        "value": "SLACK_WEBHOOK_URL"
+      },
+      "message": {
+        "title": "[P2] ${monitor.name}",
+        "body": "Tx: ${transaction.hash} — verify against governance records. https://stellar.expert/explorer/public/tx/${transaction.hash}"
+      }
+    }
+  },
+  "stellar_p3_slack": {
+    "name": "P3 Info - Slack",
+    "trigger_type": "slack",
+    "config": {
+      "slack_url": {
+        "type": "environment",
+        "value": "SLACK_WEBHOOK_URL"
+      },
+      "message": {
+        "title": "[P3] ${monitor.name}",
+        "body": "Tx: ${transaction.hash} — https://stellar.expert/explorer/public/tx/${transaction.hash}"
+      }
+    }
+  }
+}

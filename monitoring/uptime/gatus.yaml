@@ -1,0 +1,90 @@
+# Gatus — uptime monitoring & status page for the SimplyTokenized platform.
+# https://github.com/TwiN/gatus — run:  gatus
+# This produces the evidence trail for the "100% uptime, first 30 days
+# post-launch" milestone measurement. Keep retention >= 40 days.
+
+storage:
+  type: sqlite
+  path: /data/gatus.db
+  caching: true
+
+ui:
+  title: SimplyTokenized — Status
+  description: Platform and contract infrastructure uptime. Reporting window begins at mainnet launch.
+  header: SimplyTokenized Status
+
+# Alerting: wire the same channel used for on-chain alerts (see monitoring/triggers).
+alerting:
+  slack:
+    webhook-url: "${SLACK_WEBHOOK_URL}"     # set in environment
+  # email / pagerduty / discord blocks can be added symmetrically — see Gatus docs.
+
+endpoints:
+  # ---- External platform (app + API) ---------------------------------------
+  # Replace the URL placeholders with the production app and API health URLs.
+  - name: platform-app
+    group: platform
+    url: "https://<APP_URL>/"
+    method: GET
+    interval: 30s
+    conditions:
+      - "[STATUS] == 200"
+      - "[RESPONSE_TIME] < 5000"
+    alerts:
+      - type: slack
+        description: "Platform app is DOWN"
+        send-on-resolved: true
+        failure-threshold: 2
+        success-threshold: 2
+
+  - name: platform-api-health
+    group: platform
+    url: "https://<API_URL>/health"
+    method: GET
+    interval: 30s
+    conditions:
+      - "[STATUS] == 200"
+      - "[RESPONSE_TIME] < 5000"
+    alerts:
+      - type: slack
+        description: "Platform API is DOWN"
+        send-on-resolved: true
+        failure-threshold: 2
+        success-threshold: 2
+
+  # ---- Soroban RPC reachability (contract liveness proxy) -------------------
+  - name: soroban-rpc-mainnet
+    group: infrastructure
+    url: "https://mainnet.sorobanrpc.com"
+    method: POST
+    headers:
+      Content-Type: application/json
+    body: '{"jsonrpc":"2.0","id":1,"method":"getHealth"}'
+    interval: 60s
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY].result.status == healthy"
+    alerts:
+      - type: slack
+        description: "Soroban RPC unreachable or unhealthy — contract calls failing"
+        send-on-resolved: true
+        failure-threshold: 3
+        success-threshold: 2
+
+  - name: soroban-rpc-latest-ledger
+    group: infrastructure
+    url: "https://mainnet.sorobanrpc.com"
+    method: POST
+    headers:
+      Content-Type: application/json
+    body: '{"jsonrpc":"2.0","id":1,"method":"getLatestLedger"}'
+    interval: 60s
+    conditions:
+      - "[STATUS] == 200"
+      - "[BODY].result.sequence > 0"
+    alerts:
+      - type: slack
+        description: "Soroban RPC not returning ledger sequence — possible chain stall"
+        send-on-resolved: true
+        failure-threshold: 3
+        success-threshold: 2

@@ -1,5 +1,9 @@
 # Payout Contract Specification
 
+> **See also:** [docs/contracts/payout.md](contracts/payout.md) — the standardized
+> API reference aligned with the token and crowdsale contract docs. This document
+> is the extended design specification (rationale, invariants, worked examples).
+
 ## Overview
 
 The Payout contract manages token distributions to investors with multiple distribution and payout modes. It provides a flexible framework for distributing tokens or other assets to a set of investors with configurable payout methods, state machine management, and fund accounting per distribution.

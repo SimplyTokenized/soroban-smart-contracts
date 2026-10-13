@@ -1,6 +1,5 @@
 # Rust build artifacts
 target/
-Cargo.lock
 
 # IDE and editor files
 .vscode/
@@ -64,3 +63,7 @@ coverage_lcov13.txt
 coverage.json
 coverage/
 
+
+# Python (monitoring e2e scripts)
+__pycache__/
+*.pyc

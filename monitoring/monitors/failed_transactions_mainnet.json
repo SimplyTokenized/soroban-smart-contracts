@@ -1,0 +1,22 @@
+{
+  "name": "Failed Transactions on Our Contracts (Mainnet)",
+  "paused": false,
+  "networks": ["stellar_mainnet"],
+  "addresses": [
+    { "address": "<TOKEN_CONTRACT_ID_MAINNET>" },
+    { "address": "<CROWDSALE_CONTRACT_ID_MAINNET>" },
+    { "address": "<PAYOUT_CONTRACT_ID_MAINNET>" }
+  ],
+  "match_conditions": {
+    "functions": [],
+    "events": [],
+    "transactions": [
+      {
+        "status": "Failure",
+        "expression": "to == '<TOKEN_CONTRACT_ID_MAINNET>' OR to == '<CROWDSALE_CONTRACT_ID_MAINNET>' OR to == '<PAYOUT_CONTRACT_ID_MAINNET>'"
+      }
+    ]
+  },
+  "trigger_conditions": [],
+  "triggers": ["stellar_p2_slack"]
+}
