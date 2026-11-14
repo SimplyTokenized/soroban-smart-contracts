@@ -1,15 +1,15 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env, String, Symbol};
-use stellar_ownable::{self as ownable, Ownable};
-use stellar_ownable_macro::only_owner;
-use stellar_pausable::{self as pausable, Pausable};
-use stellar_pausable_macros::when_not_paused;
-use stellar_upgradeable::UpgradeableInternal;
-use stellar_upgradeable_macros::Upgradeable;
-use stellar_default_impl_macro::default_impl;
-use stellar_fungible::{FungibleToken, Base};
-use stellar_fungible::burnable::FungibleBurnable;
+use soroban_sdk::{contract, contractevent, contractimpl, contracttype, Address, Bytes, BytesN, Env, MuxedAddress, String};
+use stellar_access::ownable::{self as ownable, Ownable};
+use stellar_contract_utils::pausable::{self as pausable, Pausable};
+use stellar_contract_utils::upgradeable::{self as upgradeable, Upgradeable};
+use stellar_macros::{only_owner, when_not_paused};
+use stellar_tokens::fungible::{
+    burnable::FungibleBurnable,
+    total_supply::{self, FungibleTotalSupply, TotalSupply},
+    Base, Compose, ContractOverrides, FungibleToken,
+};
 
 // TTL constants for persistent storage (ledger-based)
 const MIN_TTL: u32 = 1_000_000;
@@ -28,7 +28,34 @@ pub enum DataKey {
     Cap,
 }
 
-#[derive(Upgradeable)]
+#[contractevent(topics = ["minter_role"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct MinterRoleEvent {
+    #[topic]
+    pub account: Address,
+    pub enabled: bool,
+}
+
+#[contractevent(topics = ["cap_change"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct CapChangeEvent {
+    pub new_cap: i128,
+}
+
+#[contractevent(topics = ["whitelist"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct WhitelistEvent {
+    #[topic]
+    pub account: Address,
+    pub whitelisted: bool,
+}
+
+#[contractevent(topics = ["whitelist_requirement_updated"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct WhitelistRequirementUpdatedEvent {
+    pub required: bool,
+}
+
 #[contract]
 pub struct TokenContract;
 
@@ -48,13 +75,13 @@ impl TokenContract {
         if cap <= 0 {
             panic!("Cap must be positive");
         }
-        
+
         // Store token metadata using OpenZeppelin Base
         Base::set_metadata(e, decimals, name, symbol);
-        
+
         // Set ownership
         ownable::set_owner(e, &owner);
-        
+
         // Set the cap with TTL extension
         e.storage()
             .persistent()
@@ -62,7 +89,7 @@ impl TokenContract {
         e.storage()
             .persistent()
             .extend_ttl(&DataKey::Cap, MIN_TTL, TARGET_TTL);
-        
+
         // Owner is a minter by default with TTL extension
         e.storage()
             .persistent()
@@ -70,7 +97,7 @@ impl TokenContract {
         e.storage()
             .persistent()
             .extend_ttl(&DataKey::MinterRole(owner.clone()), MIN_TTL, TARGET_TTL);
-        
+
         // Owner is automatically whitelisted for KYC/MiCA compliance with TTL extension
         e.storage()
             .persistent()
@@ -94,22 +121,22 @@ impl TokenContract {
     #[when_not_paused]
     pub fn mint(e: &Env, caller: Address, to: Address, amount: i128) {
         caller.require_auth();
-        
+
         // Check minter role
         let is_minter: bool = e
             .storage()
             .persistent()
             .get(&DataKey::MinterRole(caller.clone()))
             .unwrap_or(false);
-        
+
         if !is_minter {
             panic!("Caller does not have minter role");
         }
-        
+
         if amount <= 0 {
             panic!("Amount must be positive");
         }
-        
+
         // Whitelist enforcement for KYC/MiCA compliance (only if required)
         let whitelist_required: bool = Self::is_whitelist_required(e);
         if whitelist_required {
@@ -117,61 +144,56 @@ impl TokenContract {
                 panic!("Mint recipient not in whitelist");
             }
         }
-        
-        // Check cap using OpenZeppelin's total supply with overflow protection
-        let total_supply = Base::total_supply(e);
+
+        // Check cap using the tracked total supply with overflow protection
+        let total_supply = total_supply::total_supply(e);
         let cap: i128 = e
             .storage()
             .persistent()
             .get(&DataKey::Cap)
             .unwrap_or_else(|| panic!("Cap not set"));
-        
+
         let new_supply = total_supply.checked_add(amount)
             .expect("Supply overflow");
         if new_supply > cap {
             panic!("Minting would exceed cap");
         }
-        
-        // Use OpenZeppelin Base mint
-        Base::mint(e, &to, amount);
-        
-        // Emit mint event
-        e.events().publish(
-            (Symbol::new(e, "mint"), to.clone()),
-            amount,
-        );
+
+        // Mint through the contract type so supply tracking is updated
+        <Self as FungibleToken>::ContractType::mint(e, &to, amount);
     }
 
-    
+
     /// Set minter role for an address (owner only)
     #[only_owner]
-    pub fn set_minter(e: &Env, _caller: Address, account: Address, enabled: bool) {
+    pub fn set_minter(e: &Env, account: Address, enabled: bool) {
         // Prevent revoking the owner's minter role (but allow revoking other minters)
         if !enabled {
             let owner = ownable::get_owner(e)
                 .expect("Owner not set");
-            
+
             if account == owner {
                 panic!("Cannot revoke minter role from owner");
             }
         }
-        
+
         e.storage()
             .persistent()
             .set(&DataKey::MinterRole(account.clone()), &enabled);
         e.storage()
             .persistent()
             .extend_ttl(&DataKey::MinterRole(account.clone()), MIN_TTL, TARGET_TTL);
-        
+
         // Emit minter role change event
-        e.events().publish(
-            (Symbol::new(e, "minter_role"), account.clone()),
+        MinterRoleEvent {
+            account: account.clone(),
             enabled,
-        );
+        }
+        .publish(e);
     }
 
     /// Update the minting cap (owner only)
-    /// 
+    ///
     /// Semantics:
     /// - The cap represents the maximum total supply that can ever exist
     /// - Cap can only be increased, never decreased, to maintain token scarcity
@@ -180,35 +202,32 @@ impl TokenContract {
     /// - Burn operations reduce total supply but do NOT reduce the cap
     /// - Cap changes are permanent and irreversible
     #[only_owner]
-    pub fn set_cap(e: &Env, _caller: Address, new_cap: i128) {
+    pub fn set_cap(e: &Env, new_cap: i128) {
         if new_cap <= 0 {
             panic!("Cap must be positive");
         }
-        
-        let total_supply = Base::total_supply(e);
-        
+
+        let total_supply = total_supply::total_supply(e);
+
         // Require cap > total_supply to allow future minting
         if new_cap <= total_supply {
             panic!("New cap must exceed current supply to allow future minting");
         }
-        
+
         e.storage()
             .persistent()
             .set(&DataKey::Cap, &new_cap);
         e.storage()
             .persistent()
             .extend_ttl(&DataKey::Cap, MIN_TTL, TARGET_TTL);
-        
+
         // Emit cap change event
-        e.events().publish(
-            (Symbol::new(e, "cap_change"),),
-            new_cap,
-        );
+        CapChangeEvent { new_cap }.publish(e);
     }
 
     /// Set whitelist status for KYC (owner only)
     #[only_owner]
-    pub fn set_whitelist(e: &Env, _caller: Address, account: Address, whitelisted: bool) {
+    pub fn set_whitelist(e: &Env, account: Address, whitelisted: bool) {
         if whitelisted {
             e.storage()
                 .persistent()
@@ -221,12 +240,13 @@ impl TokenContract {
                 .persistent()
                 .remove(&DataKey::Whitelist(account.clone()));
         }
-        
+
         // Emit whitelist change event
-        e.events().publish(
-            (Symbol::new(e, "whitelist"), account.clone()),
+        WhitelistEvent {
+            account: account.clone(),
             whitelisted,
-        );
+        }
+        .publish(e);
     }
 
     /// Get the minting cap
@@ -237,7 +257,7 @@ impl TokenContract {
             .unwrap_or(0i128)
     }
 
-    
+
     /// Check if an address has minter role
     pub fn is_minter(e: &Env, account: Address) -> bool {
         let is_minter = e.storage()
@@ -268,16 +288,13 @@ impl TokenContract {
 
     /// Set whitelist requirement (owner only)
     #[only_owner]
-    pub fn set_whitelist_required(e: &Env, _caller: Address, required: bool) {
+    pub fn set_whitelist_required(e: &Env, required: bool) {
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), &required);
 
         // Emit event
-        e.events().publish(
-            (Symbol::new(e, "whitelist_requirement_updated"),),
-            required,
-        );
+        WhitelistRequirementUpdatedEvent { required }.publish(e);
     }
 
     /// Check if whitelist is required
@@ -305,12 +322,8 @@ impl TokenContract {
 //
 // ─── Pausable Implementation ─────────────────────────────────────────────────
 //
-#[contractimpl]
+#[contractimpl(contracttrait)]
 impl Pausable for TokenContract {
-    fn paused(e: &Env) -> bool {
-        pausable::paused(e)
-    }
-
     #[only_owner]
     fn pause(e: &Env, _caller: Address) {
         pausable::pause(e);
@@ -325,34 +338,21 @@ impl Pausable for TokenContract {
 //
 // ─── Ownable Implementation ──────────────────────────────────────────────────
 //
-#[default_impl]
-#[contractimpl]
+#[contractimpl(contracttrait)]
 impl Ownable for TokenContract {}
 
 //
 // ─── OpenZeppelin Token Implementation ─────────────────────────────────────────
 //
-#[contractimpl]
+#[contractimpl(contracttrait)]
 impl FungibleToken for TokenContract {
-    type ContractType = Base;
+    type ContractType = Compose<(TotalSupply,)>;
 
-    fn total_supply(e: &Env) -> i128 {
-        Base::total_supply(e)
-    }
-
-    fn balance(e: &Env, id: Address) -> i128 {
-        Base::balance(e, &id)
-    }
-
-    fn allowance(e: &Env, owner: Address, spender: Address) -> i128 {
-        Base::allowance(e, &owner, &spender)
-    }
-
-    fn transfer(e: &Env, from: Address, to: Address, amount: i128) {
+    fn transfer(e: &Env, from: Address, to: MuxedAddress, amount: i128) {
         if pausable::paused(e) {
             panic!("Contract is paused");
         }
-        
+
         // Whitelist enforcement for KYC/MiCA compliance (only if required)
         // Check both sender and recipient for stricter compliance
         let whitelist_required: bool = Self::is_whitelist_required(e);
@@ -360,25 +360,19 @@ impl FungibleToken for TokenContract {
             if !Self::is_whitelisted(e, from.clone()) {
                 panic!("Sender not in whitelist");
             }
-            if !Self::is_whitelisted(e, to.clone()) {
+            if !Self::is_whitelisted(e, to.address()) {
                 panic!("Recipient not in whitelist");
             }
         }
-        
-        Base::transfer(e, &from, &to, amount);
-        
-        // Emit transfer event
-        e.events().publish(
-            (Symbol::new(e, "transfer"), from.clone(), to.clone()),
-            amount,
-        );
+
+        Self::ContractType::transfer(e, &from, &to, amount);
     }
 
     fn transfer_from(e: &Env, spender: Address, from: Address, to: Address, amount: i128) {
         if pausable::paused(e) {
             panic!("Contract is paused");
         }
-        
+
         // Whitelist enforcement for KYC/MiCA compliance (only if required)
         // Check spender, from, and to for stricter compliance
         let whitelist_required: bool = Self::is_whitelist_required(e);
@@ -393,40 +387,25 @@ impl FungibleToken for TokenContract {
                 panic!("Spender not in whitelist");
             }
         }
-        
-        Base::transfer_from(e, &spender, &from, &to, amount);
-        
-        // Emit transfer_from event
-        e.events().publish(
-            (Symbol::new(e, "transfer_from"), spender.clone(), from.clone(), to.clone()),
-            amount,
-        );
+
+        Self::ContractType::transfer_from(e, &spender, &from, &to, amount);
     }
 
-    fn approve(e: &Env, owner: Address, spender: Address, amount: i128, expiration_ledger: u32) {
+    fn approve(e: &Env, owner: Address, spender: Address, amount: i128, live_until_ledger: u32) {
         if pausable::paused(e) {
             panic!("Contract is paused");
         }
-        Base::approve(e, &owner, &spender, amount, expiration_ledger);
-    }
-
-    fn decimals(e: &Env) -> u32 {
-        Base::decimals(e)
-    }
-
-    fn name(e: &Env) -> String {
-        Base::name(e)
-    }
-
-    fn symbol(e: &Env) -> String {
-        Base::symbol(e)
+        Self::ContractType::approve(e, &owner, &spender, amount, live_until_ledger);
     }
 }
 
-#[contractimpl]
+#[contractimpl(contracttrait)]
+impl FungibleTotalSupply for TokenContract {}
+
+#[contractimpl(contracttrait)]
 impl FungibleBurnable for TokenContract {
     /// Burn tokens from an account
-    /// 
+    ///
     /// Semantics:
     /// - Burn operations permanently remove tokens from circulation, reducing total supply
     /// - Burns do NOT reduce the minting cap (cap represents maximum possible supply, not current supply)
@@ -437,7 +416,7 @@ impl FungibleBurnable for TokenContract {
         if pausable::paused(e) {
             panic!("Contract is paused");
         }
-        
+
         // Whitelist enforcement for KYC/MiCA compliance (only if required)
         let whitelist_required: bool = Self::is_whitelist_required(e);
         if whitelist_required {
@@ -445,18 +424,12 @@ impl FungibleBurnable for TokenContract {
                 panic!("Sender not in whitelist");
             }
         }
-        
-        Base::burn(e, &from, amount);
-        
-        // Emit burn event
-        e.events().publish(
-            (Symbol::new(e, "burn"), from.clone()),
-            amount,
-        );
+
+        TotalSupply::burn(e, &from, amount);
     }
 
     /// Burn tokens from an account using allowance
-    /// 
+    ///
     /// Semantics:
     /// - Burn operations permanently remove tokens from circulation, reducing total supply
     /// - Burns do NOT reduce the minting cap (cap represents maximum possible supply, not current supply)
@@ -467,7 +440,7 @@ impl FungibleBurnable for TokenContract {
         if pausable::paused(e) {
             panic!("Contract is paused");
         }
-        
+
         // Whitelist enforcement for KYC/MiCA compliance (only if required)
         let whitelist_required: bool = Self::is_whitelist_required(e);
         if whitelist_required {
@@ -478,23 +451,19 @@ impl FungibleBurnable for TokenContract {
                 panic!("Spender not in whitelist");
             }
         }
-        
-        Base::burn_from(e, &spender, &from, amount);
-        
-        // Emit burn_from event
-        e.events().publish(
-            (Symbol::new(e, "burn_from"), spender.clone(), from.clone()),
-            amount,
-        );
+
+        TotalSupply::burn_from(e, &spender, &from, amount);
     }
 }
 
 //
 // ─── Upgradeable Implementation ──────────────────────────────────────────────
 //
-impl UpgradeableInternal for TokenContract {
-    fn _require_auth(e: &Env, _operator: &Address) {
-        ownable::enforce_owner_auth(e);
+#[contractimpl]
+impl Upgradeable for TokenContract {
+    #[only_owner]
+    fn upgrade(e: &Env, new_wasm_hash: BytesN<32>, _operator: Address) {
+        upgradeable::upgrade(e, &new_wasm_hash);
     }
 }
 

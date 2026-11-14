@@ -119,7 +119,7 @@ owner:    batch_distribute_automatic            (Automatic method)
 
 ## Upgrade Model
 
-`upgrade(new_wasm_hash, operator)` (OZ v0.3.0) replaces the contract WASM in
+`upgrade(new_wasm_hash, operator)` (OZ v0.8.0) replaces the contract WASM in
 place — the contract ID and all persistent storage survive. Storage layouts are
 append-only compatible by convention (never reorder `DataKey` variants or reuse
 byte-string keys for different types). OZ `Upgradeable` performs **no** storage

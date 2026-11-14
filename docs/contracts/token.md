@@ -15,7 +15,7 @@ of the standard token interface:
 | Crate | `token` |
 | Source | `token/src/lib.rs` |
 | Contract version | `1` (see `version()`) |
-| OZ components | `stellar-fungible` (Base + Burnable), `stellar-ownable`, `stellar-pausable`, `stellar-upgradeable` — all v0.3.0 |
+| OZ components | `stellar-tokens` (Fungible Base + Burnable + TotalSupply via `Compose`), `stellar-access` (Ownable), `stellar-contract-utils` (Pausable, Upgradeable) — all v0.8.0 |
 
 ## Roles & Access Control
 
@@ -26,10 +26,12 @@ of the standard token interface:
 | Whitelisted account | `set_whitelist` (owner) — owner is whitelisted by default | Can send/receive tokens when `whitelist_required` is on |
 | Any token holder | — | `transfer`, `approve`, `transfer_from`, `burn`, `burn_from` |
 
-> **Note on `_caller` parameters:** admin functions accept a `_caller: Address`
-> argument, but authorization is enforced by the `#[only_owner]` macro against the
-> **stored owner** (`owner.require_auth()`), not against the argument. Pass the
-> owner address for readability; a wrong value does not grant or deny access.
+> **Note on authorization:** `#[only_owner]` functions take no caller parameter —
+> authorization is enforced against the **stored owner**
+> (`ownable::enforce_owner_auth`). `pause`/`unpause` still take a `caller`
+> argument (required by the OZ `Pausable` trait; unused). Ownership transfer is
+> two-step: `transfer_ownership` then `accept_ownership` within
+> `live_until_ledger`.
 
 ## Data Structures & Storage
 
@@ -107,7 +109,7 @@ Returns the minting cap (`0` if unset).
 #### `set_minter`
 
 ```text
-set_minter(_caller: Address, account: Address, enabled: Bool)
+set_minter(account: Address, enabled: Bool)
 ```
 
 Grants or revokes the minter role. Revoking the **owner's** minter role panics.
@@ -120,7 +122,7 @@ Grants or revokes the minter role. Revoking the **owner's** minter role panics.
 #### `set_cap`
 
 ```text
-set_cap(_caller: Address, new_cap: i128)
+set_cap(new_cap: i128)
 ```
 
 Raises the minting cap. Governance-critical: **irreversible** — the cap can only
@@ -133,7 +135,7 @@ increase, and burns do not lower it.
 #### `set_whitelist`
 
 ```text
-set_whitelist(_caller: Address, account: Address, whitelisted: Bool)
+set_whitelist(account: Address, whitelisted: Bool)
 ```
 
 Adds/removes `account` from the whitelist (`true` writes + extends TTL, `false` removes).
@@ -143,7 +145,7 @@ Adds/removes `account` from the whitelist (`true` writes + extends TTL, `false` 
 #### `set_whitelist_required`
 
 ```text
-set_whitelist_required(_caller: Address, required: Bool)
+set_whitelist_required(required: Bool)
 ```
 
 Toggles whitelist enforcement for `mint`, `transfer`, `transfer_from`, `burn`, `burn_from`.

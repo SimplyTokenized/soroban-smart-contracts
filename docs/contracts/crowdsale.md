@@ -17,7 +17,7 @@ Two pricing modes per payment asset:
 | Crate | `crowdsale` |
 | Source | `crowdsale/src/lib.rs` |
 | Contract version | `1` (see `version()`) |
-| OZ components | `stellar-ownable`, `stellar-pausable`, `stellar-upgradeable` — v0.3.0 |
+| OZ components | `stellar-access` (Ownable), `stellar-contract-utils` (Pausable, Upgradeable) — v0.8.0 |
 
 ## Roles & Access Control
 
@@ -28,8 +28,11 @@ Two pricing modes per payment asset:
 | Crowdsale contract | Must be a **minter on the Token contract** for `buy` to mint |
 | SEP-40 oracle contract | Read-only cross-contract calls (`lastprice`, `decimals`) |
 
-> **`_caller` parameters** in admin functions are unused — authorization is checked
-> against the stored owner by `#[only_owner]`. See the token contract doc note.
+> **`#[only_owner]` functions take no caller parameter** — authorization is checked
+> against the stored owner via `ownable::enforce_owner_auth`. (`pause`/`unpause`
+> still take a `caller` argument because the OZ `Pausable` trait requires it; it is
+> unused.) Ownership transfer is two-step: `transfer_ownership` then
+> `accept_ownership` within `live_until_ledger`.
 
 ## Data Structures
 
@@ -88,10 +91,10 @@ tokens      = base_amount * price_numerator / price_denominator
 
 - Prices older than **3600 s** are rejected (`"Oracle price too stale"`)
 - `oracle_price <= 0` and `oracle_decimals >= 39` are rejected
-- `calculate_tokens()` applies the same logic but **normalizes the payment amount to
-  18 decimals** using the payment token's `decimals()` before pricing, and returns
-  `0` instead of panicking on failure. `buy()` does not normalize — it prices the
-  raw `amount`.
+- `calculate_tokens()` and `buy()` share the exact same pricing path (`_compute_tokens`)
+  on the **raw `amount` in the payment asset's base units** — quotes always match
+  executed amounts. `calculate_tokens` returns `0` instead of panicking on any
+  pricing failure.
 
 ## API Reference
 
@@ -110,7 +113,7 @@ defaults to `false`.
 #### `open_sale`
 
 ```text
-open_sale(_caller: Address, start_time: U64, end_time: U64,
+open_sale(start_time: U64, end_time: U64,
           price_numerator: I128, price_denominator: I128,
           global_cap: I128, min_tokens_received: I128)
 ```
@@ -131,10 +134,10 @@ cannot be negative"`
 #### `support_asset` / `set_asset_rate` / `remove_asset_rate`
 
 ```text
-support_asset(_caller: Address, asset_contract: Address, enabled: Bool)
-set_asset_rate(_caller: Address, asset_contract: Address,
+support_asset(asset_contract: Address, enabled: Bool)
+set_asset_rate(asset_contract: Address,
                rate_numerator: I128, rate_denominator: I128, decimals: U32)
-remove_asset_rate(_caller: Address, asset_contract: Address)
+remove_asset_rate(asset_contract: Address)
 ```
 
 `support_asset` whitelists a payment token for `buy`. `set_asset_rate` sets a manual
@@ -147,9 +150,9 @@ then fall back to the global price (still allowed if the asset is supported).
 #### `set_asset_oracle` / `set_asset_manual`
 
 ```text
-set_asset_oracle(_caller: Address, asset_contract: Address,
+set_asset_oracle(asset_contract: Address,
                  oracle_address: Address, asset: Asset)
-set_asset_manual(_caller: Address, asset_contract: Address)
+set_asset_manual(asset_contract: Address)
 ```
 
 Switches an asset between `RateSource::Oracle` and `RateSource::Manual`. In Oracle
@@ -165,9 +168,9 @@ mainnet `CALI2BYU2JE6WVRUFYTS6MSBNEHGJ35P4AVCZYF3B6QOE3QKOB2PLE6M`.
 #### `set_whitelist` / `set_whitelist_required` / `set_user_cap`
 
 ```text
-set_whitelist(_caller: Address, buyer: Address, whitelisted: Bool)
-set_whitelist_required(_caller: Address, required: Bool)
-set_user_cap(_caller: Address, buyer: Address, cap: I128)
+set_whitelist(buyer: Address, whitelisted: Bool)
+set_whitelist_required(required: Bool)
+set_user_cap(buyer: Address, cap: I128)
 ```
 
 Buyer whitelist (enforced only when `required`), and a per-user cumulative purchase
@@ -179,9 +182,9 @@ cap (absent = `i128::MAX`, i.e. unlimited).
 #### `update_treasury` / `emergency_reset_sale` / `set_test_mode`
 
 ```text
-update_treasury(_caller: Address, new_treasury: Address)
-emergency_reset_sale(_caller: Address)
-set_test_mode(_caller: Address, enabled: Bool)
+update_treasury(new_treasury: Address)
+emergency_reset_sale()
+set_test_mode(enabled: Bool)
 ```
 
 - `update_treasury` — redirects future sale proceeds.
@@ -241,13 +244,14 @@ token `transfer`/`mint` failures (insufficient balance, crowdsale not a minter, 
 
 ### Pausable / Ownable / Upgradeable
 
-Same OZ v0.3.0 surface as the token contract (`paused`, `pause`, `unpause`,
+Same OZ v0.8.0 surface as the token contract (`paused`, `pause`, `unpause`,
 `get_owner`, `transfer_ownership`, `accept_ownership`, `renounce_ownership`,
-`upgrade(Bytes32, Address)`).
+`upgrade(Bytes32, Address)`). Ownership transfer is two-step and expires at
+`live_until_ledger`.
 
-**Pause events:** this contract emits the OZ `paused`/`unpaused` events **and** a
-second custom event — topics `(paused)` → `ledger_timestamp`, `(unpaused)` →
-`ledger_timestamp`. Monitors will see two `paused`-topic events per call.
+**Pause events:** this contract emits only the OZ `paused`/`unpaused` events
+(empty data). The legacy custom pause events were removed in the v0.8.0
+migration.
 
 ## Event Index
 

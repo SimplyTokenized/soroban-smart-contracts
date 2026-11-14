@@ -970,7 +970,7 @@ The following 24 adversarial test suites were designed to validate the security 
 ### Suite 10: Decimal Normalization (6, 8, 12, 18)
 - **Contract**: Crowdsale
 - **Attack Vector**: Payment assets with non-standard decimals cause incorrect token calculations
-- **Expected Behavior**: `calculate_tokens` normalizes all payment-asset decimals to 18-decimal standard
+- **Expected Behavior**: `calculate_tokens` prices the raw payment amount exactly like `buy` (quote == executed amount)
 - **Tests**: `test_calculate_tokens_with_manual_rate_exact_decimals` (6 & 7), `test_calculate_tokens_8_and_12_decimals` (8 & 12), `test_calculate_tokens_exact_18_decimals` (18), `test_calculate_tokens_20_decimals` (20)
 - **Status**: ✅ Implemented
 

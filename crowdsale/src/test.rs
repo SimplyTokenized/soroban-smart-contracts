@@ -9,7 +9,7 @@ use soroban_sdk::{
     Address,
     Env,
     Symbol,
-    contract, contractimpl,
+    contract, contractevent, contractimpl,
 };
 
 fn create_token_contract<'a>(e: &Env, admin: &Address) -> token::Client<'a> {
@@ -66,9 +66,7 @@ fn test_open_sale() {
     let min_tokens_received = 10_000000; // 10 tokens minimum
 
     // Open the sale
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &price_num,
         &price_den,
@@ -98,9 +96,7 @@ fn test_whitelist_and_buy() {
     // Set up sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,  // 1:1 price
         &1_000_000,
@@ -111,17 +107,17 @@ fn test_whitelist_and_buy() {
     // Create a stablecoin contract
     let stablecoin_admin = Address::generate(&e);
     let stablecoin = create_token_contract(&e, &stablecoin_admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Enable test mode to skip token transfers (Stellar Asset contracts don't support minting in tests)
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     // Use stablecoin_admin as buyer since they have admin privileges on the Stellar Asset contract
     let buyer = stablecoin_admin.clone();
-    client.set_whitelist(&admin, &buyer, &true);
+    client.set_whitelist(&buyer, &true);
     
     // Set user cap
-    client.set_user_cap(&admin, &buyer, &100_000000);  // 100 stablecoins cap
+    client.set_user_cap(&buyer, &100_000000);  // 100 stablecoins cap
     
     // Buy tokens
     let buy_amount = 50_000000;  // 50 stablecoins
@@ -147,9 +143,7 @@ fn test_buy_before_sale_starts() {
     
     // Set up sale with future start time
     let start_time = e.ledger().timestamp() + 1000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &(start_time + 10000),
         &1_000_000,
         &1_000_000,
@@ -160,7 +154,7 @@ fn test_buy_before_sale_starts() {
     // Try to buy before sale starts (should panic)
     let buyer = Address::generate(&e);
     let stablecoin = create_token_contract(&e, &Address::generate(&e));
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     client.buy(&buyer, &stablecoin.address, &50_000000);
 }
 
@@ -178,9 +172,7 @@ fn test_set_and_get_asset_rate() {
     let stablecoin = create_token_contract(&e, &admin);
 
     // Set asset rate
-    client.set_asset_rate(
-        &admin,
-        &stablecoin.address,
+    client.set_asset_rate(&stablecoin.address,
         &2_000_000,  // 2 tokens per 1 stablecoin
         &1_000_000,
         &6,  // 6 decimals
@@ -209,9 +201,7 @@ fn test_calculate_tokens() {
     let stablecoin = create_token_contract(&e, &admin);
 
     // Set asset rate: 2 tokens per 1 stablecoin
-    client.set_asset_rate(
-        &admin,
-        &stablecoin.address,
+    client.set_asset_rate(&stablecoin.address,
         &2_000_000,
         &1_000_000,
         &6,
@@ -219,7 +209,7 @@ fn test_calculate_tokens() {
 
     // Calculate tokens for 50 stablecoins
     let payment_amount = 50_000000;  // 50 stablecoins
-    let expected_tokens = 100_00000000000000000;  // 100 tokens with 18 decimals
+    let expected_tokens = 100_000000;  // 50_000000 payment at 2:1 rate
     let calculated = client.calculate_tokens(&stablecoin.address, &payment_amount);
     assert_eq!(calculated, expected_tokens);
 
@@ -243,9 +233,7 @@ fn test_buy_with_per_asset_rate() {
     // Set up sale with global price (1:1)
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -255,22 +243,20 @@ fn test_buy_with_per_asset_rate() {
 
     // Create a stablecoin with per-asset rate (2:1)
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
-    client.set_asset_rate(
-        &admin,
-        &stablecoin.address,
+    client.support_asset(&stablecoin.address, &true);
+    client.set_asset_rate(&stablecoin.address,
         &2_000_000,  // 2 tokens per 1 stablecoin
         &1_000_000,
         &6,
     );
 
     // Enable test mode to skip token transfers
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
 
     // Use admin as buyer since they have admin privileges on the stablecoin
     let buyer = admin.clone();
-    client.set_whitelist(&admin, &buyer, &true);
-    client.set_user_cap(&admin, &buyer, &200_000000);
+    client.set_whitelist(&buyer, &true);
+    client.set_user_cap(&buyer, &200_000000);
 
     // Buy tokens - should use per-asset rate (2:1)
     let buy_amount = 50_000000;  // 50 stablecoins
@@ -293,9 +279,7 @@ fn test_buy_fallback_to_global_price() {
     // Set up sale with global price (1:1)
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -305,15 +289,15 @@ fn test_buy_fallback_to_global_price() {
 
     // Create a stablecoin WITHOUT per-asset rate
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
 
     // Enable test mode to skip token transfers
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
 
     // Use admin as buyer since they have admin privileges on the stablecoin
     let buyer = admin.clone();
-    client.set_whitelist(&admin, &buyer, &true);
-    client.set_user_cap(&admin, &buyer, &100_000000);
+    client.set_whitelist(&buyer, &true);
+    client.set_user_cap(&buyer, &100_000000);
 
     // Buy tokens - should fall back to global price (1:1)
     let buy_amount = 50_000000;  // 50 stablecoins
@@ -337,9 +321,7 @@ fn test_remove_asset_rate() {
     let stablecoin = create_token_contract(&e, &admin);
 
     // Set asset rate
-    client.set_asset_rate(
-        &admin,
-        &stablecoin.address,
+    client.set_asset_rate(&stablecoin.address,
         &2_000_000,
         &1_000_000,
         &6,
@@ -349,7 +331,7 @@ fn test_remove_asset_rate() {
     assert_eq!(client.has_asset_rate(&stablecoin.address), true);
 
     // Remove asset rate
-    client.remove_asset_rate(&admin, &stablecoin.address);
+    client.remove_asset_rate(&stablecoin.address);
 
     // Verify rate was removed
     assert_eq!(client.has_asset_rate(&stablecoin.address), false);
@@ -370,9 +352,7 @@ fn test_set_asset_oracle() {
     let asset = Asset::Other(Symbol::new(&e, "USDC"));
 
     // Configure oracle for asset
-    client.set_asset_oracle(
-        &admin,
-        &stablecoin.address,
+    client.set_asset_oracle(&stablecoin.address,
         &oracle_address,
         &asset,
     );
@@ -400,13 +380,13 @@ fn test_set_asset_manual() {
     // Configure oracle first
     let oracle_address = Address::generate(&e);
     let asset = Asset::Other(Symbol::new(&e, "USDC"));
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_address, &asset);
+    client.set_asset_oracle(&stablecoin.address, &oracle_address, &asset);
 
     // Verify oracle mode
     assert_eq!(client.get_asset_rate_source(&stablecoin.address), RateSource::Oracle);
 
     // Revert to manual mode
-    client.set_asset_manual(&admin, &stablecoin.address);
+    client.set_asset_manual(&stablecoin.address);
 
     // Verify manual mode
     assert_eq!(client.get_asset_rate_source(&stablecoin.address), RateSource::Manual);
@@ -441,9 +421,7 @@ fn test_set_invalid_asset_rate() {
     let stablecoin = create_token_contract(&e, &admin);
 
     // Try to set invalid rate (zero numerator)
-    client.set_asset_rate(
-        &admin,
-        &stablecoin.address,
+    client.set_asset_rate(&stablecoin.address,
         &0,
         &1_000_000,
         &6,
@@ -462,9 +440,7 @@ fn test_buy_not_whitelisted() {
     
     // Set up sale
     let start_time = e.ledger().timestamp();
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &(start_time + 10000),
         &1_000_000,
         &1_000_000,
@@ -475,9 +451,9 @@ fn test_buy_not_whitelisted() {
     // Try to buy without being whitelisted (should panic)
     let buyer = Address::generate(&e);
     let stablecoin = create_token_contract(&e, &Address::generate(&e));
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     // Enable whitelist requirement for this test
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     client.buy(&buyer, &stablecoin.address, &50_000000);
 }
 
@@ -495,9 +471,7 @@ fn test_pause_functionality() {
     client.pause(&admin);
     
     // Try to open a sale (should panic)
-    client.open_sale(
-        &admin,
-        &e.ledger().timestamp(),
+    client.open_sale(&e.ledger().timestamp(),
         &(e.ledger().timestamp() + 10000),
         &1_000_000,
         &1_000_000,
@@ -519,11 +493,11 @@ fn test_set_whitelist_required() {
     assert_eq!(client.is_whitelist_required(), false);
     
     // Set to true
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     assert_eq!(client.is_whitelist_required(), true);
     
     // Set back to false
-    client.set_whitelist_required(&admin, &false);
+    client.set_whitelist_required(&false);
     assert_eq!(client.is_whitelist_required(), false);
 }
 
@@ -602,9 +576,7 @@ fn test_buy_without_whitelist_when_disabled() {
     // Set up sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,  // 1:1 price
         &1_000_000,
@@ -615,17 +587,17 @@ fn test_buy_without_whitelist_when_disabled() {
     // Create a stablecoin contract
     let stablecoin_admin = Address::generate(&e);
     let stablecoin = create_token_contract(&e, &stablecoin_admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Disable whitelist requirement
-    client.set_whitelist_required(&admin, &false);
+    client.set_whitelist_required(&false);
     
     // Enable test mode to skip token transfers
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     // Use stablecoin_admin as buyer since they have admin privileges on the stablecoin
     let buyer = stablecoin_admin.clone();
-    client.set_user_cap(&admin, &buyer, &100_000000);  // 100 stablecoins cap
+    client.set_user_cap(&buyer, &100_000000);  // 100 stablecoins cap
     
     // Buy tokens - should succeed even though not whitelisted
     let buy_amount = 50_000000;  // 50 stablecoins
@@ -649,9 +621,7 @@ fn test_buy_fails_with_whitelist_enabled() {
     // Set up sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,  // 1:1 price
         &1_000_000,
@@ -662,10 +632,10 @@ fn test_buy_fails_with_whitelist_enabled() {
     // Create a stablecoin contract
     let stablecoin_admin = Address::generate(&e);
     let stablecoin = create_token_contract(&e, &stablecoin_admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Enable whitelist requirement for this test
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     assert_eq!(client.is_whitelist_required(), true);
     
     // Create a buyer without whitelisting
@@ -688,9 +658,7 @@ fn test_oracle_mode_with_fixed_price() {
     // price_numerator = 1, price_denominator = 2 (1 NWHSR = 2 EUR)
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,  // 1 NWHSR
         &2_000_000,  // = 2 EUR
@@ -700,7 +668,7 @@ fn test_oracle_mode_with_fixed_price() {
     
     // Create a stablecoin
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Configure oracle for the stablecoin
     // Note: This test validates the logic structure but requires a real oracle or mock
@@ -712,17 +680,17 @@ fn test_oracle_mode_with_fixed_price() {
     // - tokens = (4_000_000 * 1) / 2_000_000 = 2_000_000 (2 NWHSR)
     let oracle_address = Address::generate(&e);
     let asset = Asset::Other(Symbol::new(&e, "EURC"));
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_address, &asset);
+    client.set_asset_oracle(&stablecoin.address, &oracle_address, &asset);
     
     // Verify oracle configuration
     assert_eq!(client.get_asset_rate_source(&stablecoin.address), RateSource::Oracle);
     
     // Enable test mode to skip token transfers
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     // Use admin as buyer
     let buyer = admin.clone();
-    client.set_user_cap(&admin, &buyer, &100_000000);
+    client.set_user_cap(&buyer, &100_000000);
     
     // Note: This test validates configuration only
     // Full integration testing requires either:
@@ -743,9 +711,7 @@ fn test_calculate_tokens_matches_buy_manual_mode() {
     // Set up sale with global price (1:1)
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -755,22 +721,20 @@ fn test_calculate_tokens_matches_buy_manual_mode() {
     
     // Create a stablecoin with per-asset rate (2:1)
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
-    client.set_asset_rate(
-        &admin,
-        &stablecoin.address,
+    client.support_asset(&stablecoin.address, &true);
+    client.set_asset_rate(&stablecoin.address,
         &2_000_000,
         &1_000_000,
         &6,
     );
     
     // Enable test mode
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     // Use admin as buyer
     let buyer = admin.clone();
-    client.set_whitelist(&admin, &buyer, &true);
-    client.set_user_cap(&admin, &buyer, &200_000000);
+    client.set_whitelist(&buyer, &true);
+    client.set_user_cap(&buyer, &200_000000);
     
     // Calculate tokens for 50 stablecoins
     let payment_amount = 50_000000;
@@ -780,10 +744,8 @@ fn test_calculate_tokens_matches_buy_manual_mode() {
     client.buy(&buyer, &stablecoin.address, &payment_amount);
     
     // Verify calculate_tokens() matches buy() in Manual mode
-    // Note: user_allocation may return a different precision than calculate_tokens
-    // due to internal token accounting
-    assert_eq!(calculated, 100_00000000000000000);
-    assert!(client.user_allocation(&buyer) > 0, "User should have allocated tokens");
+    assert_eq!(calculated, 100_000000);
+    assert_eq!(client.user_allocation(&buyer), calculated, "user_allocation must equal the quoted amount");
 }
 
 #[test]
@@ -798,9 +760,7 @@ fn test_calculate_tokens_manual_mode_fallback() {
     // Set up sale with global price (1:1)
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -810,14 +770,14 @@ fn test_calculate_tokens_manual_mode_fallback() {
     
     // Create a stablecoin WITHOUT per-asset rate
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Calculate tokens for 50 stablecoins (should use global price)
     let payment_amount = 50_000000;
     let calculated = client.calculate_tokens(&stablecoin.address, &payment_amount);
     
     // Verify it uses global price (1:1)
-    assert_eq!(calculated, 5000000000000000000);
+    assert_eq!(calculated, 50_000000);
 }
 
 // ========== Adversarial Test Suites ==========
@@ -864,9 +824,7 @@ fn test_min_tokens_received_rejects_negative() {
     let end_time = start_time + 10000;
     
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        client.open_sale(
-            &admin,
-            &start_time,
+        client.open_sale(&start_time,
             &end_time,
             &1_000_000,
             &1_000_000,
@@ -891,7 +849,7 @@ fn test_get_asset_oracle_config_none() {
     
     // Create asset without oracle configuration
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Verify oracle config returns None when not configured
     let oracle_config = client.get_asset_oracle_config(&stablecoin.address);
@@ -910,9 +868,7 @@ fn test_get_asset_rate_source_manual() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -922,8 +878,8 @@ fn test_get_asset_rate_source_manual() {
     
     // Set manual rate
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
-    client.set_asset_rate(&admin, &stablecoin.address, &2_000_000, &1_000_000, &6);
+    client.support_asset(&stablecoin.address, &true);
+    client.set_asset_rate(&stablecoin.address, &2_000_000, &1_000_000, &6);
     
     // Verify rate source is Manual
     let rate_source = client.get_asset_rate_source(&stablecoin.address);
@@ -959,7 +915,7 @@ fn test_is_asset_supported() {
     assert!(!client.is_asset_supported(&stablecoin.address));
     
     // Support asset
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Now supported
     assert!(client.is_asset_supported(&stablecoin.address));
@@ -977,9 +933,7 @@ fn test_has_asset_rate() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -989,13 +943,13 @@ fn test_has_asset_rate() {
     
     // Create asset
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Initially no rate
     assert!(!client.has_asset_rate(&stablecoin.address));
     
     // Set rate
-    client.set_asset_rate(&admin, &stablecoin.address, &2_000_000, &1_000_000, &6);
+    client.set_asset_rate(&stablecoin.address, &2_000_000, &1_000_000, &6);
     
     // Now has rate
     assert!(client.has_asset_rate(&stablecoin.address));
@@ -1013,9 +967,7 @@ fn test_get_sale_config() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -1047,9 +999,7 @@ fn test_user_allocation() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -1063,7 +1013,7 @@ fn test_user_allocation() {
     assert_eq!(client.user_allocation(&buyer), 0);
     
     // Set user cap
-    client.set_user_cap(&admin, &buyer, &100_000000);
+    client.set_user_cap(&buyer, &100_000000);
     
     // Still no allocation until purchase
     assert_eq!(client.user_allocation(&buyer), 0);
@@ -1113,7 +1063,7 @@ fn test_update_treasury() {
     let new_treasury = Address::generate(&e);
     
     // Update treasury
-    client.update_treasury(&admin, &new_treasury);
+    client.update_treasury(&new_treasury);
     
     // Verify treasury was updated
     assert_eq!(client.treasury(), new_treasury);
@@ -1132,13 +1082,13 @@ fn test_is_whitelist_required() {
     assert!(!client.is_whitelist_required());
     
     // Enable whitelist requirement
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Now whitelist is required
     assert!(client.is_whitelist_required());
     
     // Disable whitelist requirement
-    client.set_whitelist_required(&admin, &false);
+    client.set_whitelist_required(&false);
     
     // Now whitelist is not required
     assert!(!client.is_whitelist_required());
@@ -1156,9 +1106,7 @@ fn test_set_user_cap() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -1169,7 +1117,7 @@ fn test_set_user_cap() {
     let buyer = Address::generate(&e);
     
     // Set user cap
-    client.set_user_cap(&admin, &buyer, &100_000000);
+    client.set_user_cap(&buyer, &100_000000);
     
     // Verify cap was set
     // Note: This tests the setter, verification would require checking internal state
@@ -1190,13 +1138,13 @@ fn test_set_whitelist() {
     assert!(!client.is_whitelisted(&buyer));
     
     // Add to whitelist
-    client.set_whitelist(&admin, &buyer, &true);
+    client.set_whitelist(&buyer, &true);
     
     // Now whitelisted
     assert!(client.is_whitelisted(&buyer));
     
     // Remove from whitelist
-    client.set_whitelist(&admin, &buyer, &false);
+    client.set_whitelist(&buyer, &false);
     
     // No longer whitelisted
     assert!(!client.is_whitelisted(&buyer));
@@ -1215,13 +1163,13 @@ fn test_set_test_mode() {
     assert!(!client.is_test_mode());
     
     // Enable test mode
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     // Now test mode is enabled
     assert!(client.is_test_mode());
     
     // Disable test mode
-    client.set_test_mode(&admin, &false);
+    client.set_test_mode(&false);
     
     // No longer in test mode
     assert!(!client.is_test_mode());
@@ -1267,9 +1215,7 @@ fn test_total_sold() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -1279,11 +1225,11 @@ fn test_total_sold() {
     
     // Support asset and set rate
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
-    client.set_asset_rate(&admin, &stablecoin.address, &2_000_000, &1_000_000, &6);
+    client.support_asset(&stablecoin.address, &true);
+    client.set_asset_rate(&stablecoin.address, &2_000_000, &1_000_000, &6);
     
     // In test mode, we can buy without actual token transfer
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     let buyer = Address::generate(&e);
     client.buy(&buyer, &stablecoin.address, &100_0000000);
@@ -1308,9 +1254,7 @@ fn test_buy_insufficient_payment() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -1320,11 +1264,11 @@ fn test_buy_insufficient_payment() {
     
     // Support asset and set rate
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
-    client.set_asset_rate(&admin, &stablecoin.address, &2_000_000, &1_000_000, &6);
+    client.support_asset(&stablecoin.address, &true);
+    client.set_asset_rate(&stablecoin.address, &2_000_000, &1_000_000, &6);
     
     // Enable test mode to avoid token transfer issues
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     let buyer = Address::generate(&e);
     
@@ -1346,9 +1290,7 @@ fn test_buy_over_global_cap() {
     // Open sale with small cap
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -1358,11 +1300,11 @@ fn test_buy_over_global_cap() {
     
     // Support asset and set rate
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
-    client.set_asset_rate(&admin, &stablecoin.address, &2_000_000, &1_000_000, &6);
+    client.support_asset(&stablecoin.address, &true);
+    client.set_asset_rate(&stablecoin.address, &2_000_000, &1_000_000, &6);
     
     // Enable test mode
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     let buyer = Address::generate(&e);
     
@@ -1386,9 +1328,7 @@ fn test_open_sale_after_tokens_sold() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -1398,18 +1338,16 @@ fn test_open_sale_after_tokens_sold() {
     
     // Support asset and set rate
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
-    client.set_asset_rate(&admin, &stablecoin.address, &2_000_000, &1_000_000, &6);
+    client.support_asset(&stablecoin.address, &true);
+    client.set_asset_rate(&stablecoin.address, &2_000_000, &1_000_000, &6);
     
     // Enable test mode and buy tokens
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     let buyer = Address::generate(&e);
     client.buy(&buyer, &stablecoin.address, &100_0000000);
     
     // Try to reopen sale (should panic)
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -1430,9 +1368,7 @@ fn test_emergency_reset_sale() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -1442,11 +1378,11 @@ fn test_emergency_reset_sale() {
     
     // Support asset and set rate
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
-    client.set_asset_rate(&admin, &stablecoin.address, &2_000_000, &1_000_000, &6);
+    client.support_asset(&stablecoin.address, &true);
+    client.set_asset_rate(&stablecoin.address, &2_000_000, &1_000_000, &6);
     
     // Enable test mode and buy tokens
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     let buyer = Address::generate(&e);
     client.buy(&buyer, &stablecoin.address, &100_0000000);
     
@@ -1455,7 +1391,7 @@ fn test_emergency_reset_sale() {
     assert!(total_before > 0);
     
     // Emergency reset sale
-    client.emergency_reset_sale(&admin);
+    client.emergency_reset_sale();
     
     // Verify total_sold reset to 0
     assert_eq!(client.total_sold(), 0);
@@ -1476,9 +1412,7 @@ fn test_user_cap_enforcement() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -1488,15 +1422,15 @@ fn test_user_cap_enforcement() {
     
     // Support asset and set rate
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
-    client.set_asset_rate(&admin, &stablecoin.address, &2_000_000, &1_000_000, &6);
+    client.support_asset(&stablecoin.address, &true);
+    client.set_asset_rate(&stablecoin.address, &2_000_000, &1_000_000, &6);
     
     // Set user cap
     let buyer = Address::generate(&e);
-    client.set_user_cap(&admin, &buyer, &50_000000);
+    client.set_user_cap(&buyer, &50_000000);
     
     // Enable test mode
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     // Buy up to the cap (should panic with "Exceeds user cap")
     client.buy(&buyer, &stablecoin.address, &50_000000);
@@ -1515,9 +1449,7 @@ fn test_unsupported_asset_buy() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -1529,7 +1461,7 @@ fn test_unsupported_asset_buy() {
     let stablecoin = create_token_contract(&e, &admin);
     
     // Enable test mode
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     let buyer = Address::generate(&e);
     
@@ -1552,13 +1484,13 @@ fn test_whitelist_toggle() {
     let initial_required = client.is_whitelist_required();
     
     // Toggle whitelist requirement
-    client.set_whitelist_required(&admin, &!initial_required);
+    client.set_whitelist_required(&!initial_required);
     
     // Verify toggle
     assert_eq!(client.is_whitelist_required(), !initial_required);
     
     // Toggle back
-    client.set_whitelist_required(&admin, &initial_required);
+    client.set_whitelist_required(&initial_required);
     
     // Verify back to original
     assert_eq!(client.is_whitelist_required(), initial_required);
@@ -1578,12 +1510,12 @@ fn test_multiple_user_allocations() {
     let user3 = Address::generate(&e);
     
     // Set different allocations for different users
-    client.set_user_cap(&admin, &user1, &100_000000);
-    client.set_user_cap(&admin, &user2, &200_000000);
-    client.set_user_cap(&admin, &user3, &300_000000);
+    client.set_user_cap(&user1, &100_000000);
+    client.set_user_cap(&user2, &200_000000);
+    client.set_user_cap(&user3, &300_000000);
     
     // Update one user's allocation
-    client.set_user_cap(&admin, &user1, &150_000000);
+    client.set_user_cap(&user1, &150_000000);
 }
 
 #[test]
@@ -1600,7 +1532,7 @@ fn test_treasury_operations() {
     
     // Update treasury
     let new_treasury = Address::generate(&e);
-    client.update_treasury(&admin, &new_treasury);
+    client.update_treasury(&new_treasury);
     
     // Verify treasury changed
     assert_eq!(client.treasury(), new_treasury);
@@ -1619,9 +1551,7 @@ fn test_asset_without_rate() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -1631,10 +1561,10 @@ fn test_asset_without_rate() {
     
     // Support asset but don't set rate
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Enable test mode
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     let buyer = Address::generate(&e);
     
@@ -1659,10 +1589,10 @@ fn test_buy_without_sale_configured() {
     let stablecoin = create_token_contract(&e, &stablecoin_admin);
     
     // Support the asset
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Enable test mode
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     let buyer = Address::generate(&e);
     
@@ -1716,14 +1646,14 @@ fn test_calculate_tokens_with_manual_rate_exact_decimals() {
     // Open sale with price
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin_admin = Address::generate(&e);
     let stablecoin = create_token_contract(&e, &stablecoin_admin);
     
     // Support asset with manual rate
-    client.support_asset(&admin, &stablecoin.address, &true);
-    client.set_asset_rate(&admin, &stablecoin.address, &1_000_000, &1_000_000, &7);
+    client.support_asset(&stablecoin.address, &true);
+    client.set_asset_rate(&stablecoin.address, &1_000_000, &1_000_000, &7);
     
     // Calculate tokens - stablecoin has 7 decimals, so normalization happens
     let result = client.calculate_tokens(&stablecoin.address, &100_0000000);
@@ -1742,13 +1672,13 @@ fn test_emergency_reset_sale_verify_state() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     // Verify total_sold is 0 initially
     assert_eq!(client.total_sold(), 0);
     
     // Emergency reset
-    client.emergency_reset_sale(&admin);
+    client.emergency_reset_sale();
     
     // Verify total_sold is still 0 after reset
     assert_eq!(client.total_sold(), 0);
@@ -1806,15 +1736,15 @@ fn test_oracle_calculate_tokens_success() {
     // Open sale
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Configure oracle
     let oracle_addr = create_mock_oracle(&e);
     let asset = Asset::Other(Symbol::new(&e, "USDC"));
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_addr, &asset);
+    client.set_asset_oracle(&stablecoin.address, &oracle_addr, &asset);
     
     // Calculate tokens using oracle path
     let result = client.calculate_tokens(&stablecoin.address, &100_0000000);
@@ -1832,14 +1762,14 @@ fn test_oracle_calculate_tokens_stale_price() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     let oracle_addr = create_mock_oracle(&e);
     let asset = Asset::Other(Symbol::new(&e, "USDC"));
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_addr, &asset);
+    client.set_asset_oracle(&stablecoin.address, &oracle_addr, &asset);
     
     // Set stale price (timestamp far in the past)
     let mock_client = MockOracleClient::new(&e, &oracle_addr);
@@ -1864,14 +1794,14 @@ fn test_oracle_calculate_tokens_zero_price() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     let oracle_addr = create_mock_oracle(&e);
     let asset = Asset::Other(Symbol::new(&e, "USDC"));
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_addr, &asset);
+    client.set_asset_oracle(&stablecoin.address, &oracle_addr, &asset);
     
     // Set zero price
     let mock_client = MockOracleClient::new(&e, &oracle_addr);
@@ -1893,14 +1823,14 @@ fn test_oracle_calculate_tokens_negative_price() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     let oracle_addr = create_mock_oracle(&e);
     let asset = Asset::Other(Symbol::new(&e, "USDC"));
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_addr, &asset);
+    client.set_asset_oracle(&stablecoin.address, &oracle_addr, &asset);
     
     // Set negative price
     let mock_client = MockOracleClient::new(&e, &oracle_addr);
@@ -1922,14 +1852,14 @@ fn test_oracle_calculate_tokens_large_decimals() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     let oracle_addr = create_mock_oracle(&e);
     let asset = Asset::Other(Symbol::new(&e, "USDC"));
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_addr, &asset);
+    client.set_asset_oracle(&stablecoin.address, &oracle_addr, &asset);
     
     // Set very large decimals (>= 39)
     let mock_client = MockOracleClient::new(&e, &oracle_addr);
@@ -1951,10 +1881,10 @@ fn test_oracle_calculate_tokens_no_oracle_address() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Set rate source to Oracle but DON'T configure oracle address
     // We need to manually set the rate source without the address
@@ -1979,16 +1909,16 @@ fn test_oracle_calculate_tokens_high_decimals_token() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     // Stellar asset contracts have 7 decimals, so payment_decimals < 18 path is covered
     // For > 18 we'd need a custom token. Let's verify the < 18 path works with oracle
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     let oracle_addr = create_mock_oracle(&e);
     let asset = Asset::Other(Symbol::new(&e, "USDC"));
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_addr, &asset);
+    client.set_asset_oracle(&stablecoin.address, &oracle_addr, &asset);
     
     // Verify calculation works with 7-decimal token (payment_decimals < 18 path)
     let result = client.calculate_tokens(&stablecoin.address, &100_0000000);
@@ -2006,16 +1936,16 @@ fn test_oracle_buy_success_with_stellar_asset() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Configure oracle with Stellar asset type instead of Other
     let oracle_addr = create_mock_oracle(&e);
     let asset = Asset::Stellar(stablecoin.address.clone());
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_addr, &asset);
-    client.set_test_mode(&admin, &true);
+    client.set_asset_oracle(&stablecoin.address, &oracle_addr, &asset);
+    client.set_test_mode(&true);
     
     // Buy with oracle path using Stellar asset type
     let buyer = Address::generate(&e);
@@ -2035,15 +1965,15 @@ fn test_oracle_buy_success() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     let oracle_addr = create_mock_oracle(&e);
     let asset = Asset::Other(Symbol::new(&e, "USDC"));
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_addr, &asset);
-    client.set_test_mode(&admin, &true);
+    client.set_asset_oracle(&stablecoin.address, &oracle_addr, &asset);
+    client.set_test_mode(&true);
     
     // Buy with oracle path - should succeed
     let buyer = Address::generate(&e);
@@ -2064,14 +1994,14 @@ fn test_oracle_calculate_tokens_custom_decimals() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     let oracle_addr = create_mock_oracle(&e);
     let asset = Asset::Other(Symbol::new(&e, "USDC"));
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_addr, &asset);
+    client.set_asset_oracle(&stablecoin.address, &oracle_addr, &asset);
     
     // Set custom oracle decimals
     let mock_client = MockOracleClient::new(&e, &oracle_addr);
@@ -2093,15 +2023,15 @@ fn test_oracle_calculate_tokens_no_oracle_asset() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Configure oracle, then revert to manual (clears rate source but not address/asset)
     let oracle_addr = create_mock_oracle(&e);
     let asset = Asset::Other(Symbol::new(&e, "USDC"));
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_addr, &asset);
+    client.set_asset_oracle(&stablecoin.address, &oracle_addr, &asset);
     
     // Set back to manual, then set back to oracle with a different approach
     // set_asset_manual sets rate source to Manual but leaves OracleAddress and OracleAssetCode in storage
@@ -2127,21 +2057,21 @@ fn test_oracle_buy_with_manual_rate_fallback() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Configure oracle, then revert to manual
     let oracle_addr = create_mock_oracle(&e);
     let asset = Asset::Other(Symbol::new(&e, "USDC"));
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_addr, &asset);
-    client.set_asset_manual(&admin, &stablecoin.address);
+    client.set_asset_oracle(&stablecoin.address, &oracle_addr, &asset);
+    client.set_asset_manual(&stablecoin.address);
     
     // Set manual rate
-    client.set_asset_rate(&admin, &stablecoin.address, &2_000_000, &1_000_000, &7);
+    client.set_asset_rate(&stablecoin.address, &2_000_000, &1_000_000, &7);
     
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     // Buy with manual rate (not oracle)
     let buyer = Address::generate(&e);
@@ -2161,13 +2091,13 @@ fn test_oracle_calculate_tokens_with_manual_rate() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Set manual rate (not oracle)
-    client.set_asset_rate(&admin, &stablecoin.address, &2_000_000, &1_000_000, &7);
+    client.set_asset_rate(&stablecoin.address, &2_000_000, &1_000_000, &7);
     
     // Calculate with manual rate path
     let result = client.calculate_tokens(&stablecoin.address, &100_0000000);
@@ -2184,7 +2114,7 @@ fn test_oracle_calculate_tokens_no_sale_configured() {
     let client = create_crowdsale_contract(&e, &token);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Don't open sale - calculate_tokens should still work with default price
     let result = client.calculate_tokens(&stablecoin.address, &100_0000000);
@@ -2203,14 +2133,14 @@ fn test_oracle_calculate_tokens_none_price() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     let oracle_addr = create_mock_oracle(&e);
     let asset = Asset::Other(Symbol::new(&e, "USDC"));
-    client.set_asset_oracle(&admin, &stablecoin.address, &oracle_addr, &asset);
+    client.set_asset_oracle(&stablecoin.address, &oracle_addr, &asset);
     
     // Make oracle return None
     let mock_client = MockOracleClient::new(&e, &oracle_addr);
@@ -2228,6 +2158,16 @@ mod mock_token {
     #[contract]
     pub struct MockTokenCustomDec;
 
+    #[contractevent(topics = ["transfer"], data_format = "single-value")]
+    #[derive(Clone)]
+    pub struct MockTransfer {
+        #[topic]
+        pub from: Address,
+        #[topic]
+        pub to: Address,
+        pub amount: i128,
+    }
+
     #[contractimpl]
     impl MockTokenCustomDec {
         pub fn __constructor(env: &Env, decimals: u32) {
@@ -2238,7 +2178,7 @@ mod mock_token {
         }
         pub fn balance(_env: &Env, _addr: Address) -> i128 { 1_000_000_000_000_000_000 }
         pub fn transfer(env: &Env, from: Address, to: Address, amount: i128) {
-            env.events().publish((Symbol::new(env, "transfer"), from, to), amount);
+            MockTransfer { from, to, amount }.publish(env);
         }
         pub fn allowance(_env: &Env, _from: Address, _spender: Address) -> i128 { 0 }
         pub fn approve(_env: &Env, _from: Address, _spender: Address, _amount: i128, _expiration: u32) {}
@@ -2256,11 +2196,11 @@ fn test_calculate_tokens_exact_18_decimals() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     // Register mock token with 18 decimals
     let mock_token_addr = e.register(mock_token::MockTokenCustomDec, (&18u32,));
-    client.support_asset(&admin, &mock_token_addr, &true);
+    client.support_asset(&mock_token_addr, &true);
     
     // Calculate tokens - exercises payment_decimals == 18 path (line 825)
     let result = client.calculate_tokens(&mock_token_addr, &100_0000000);
@@ -2278,11 +2218,11 @@ fn test_calculate_tokens_20_decimals() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     // Register mock token with 20 decimals (> 18)
     let mock_token_addr = e.register(mock_token::MockTokenCustomDec, (&20u32,));
-    client.support_asset(&admin, &mock_token_addr, &true);
+    client.support_asset(&mock_token_addr, &true);
     
     // Calculate tokens - exercises payment_decimals > 18 path (lines 822-823)
     let result = client.calculate_tokens(&mock_token_addr, &100_0000000_000000000000);
@@ -2302,10 +2242,10 @@ fn test_calculate_tokens_oracle_no_address() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Set Oracle rate source WITHOUT configuring oracle address (impossible state via normal API)
     client._test_oracle_rate_only(&stablecoin.address);
@@ -2326,10 +2266,10 @@ fn test_calculate_tokens_oracle_no_asset_code() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Set Oracle rate source + oracle address but NOT asset code (line 845)
     let oracle_addr = create_mock_oracle(&e);
@@ -2352,14 +2292,14 @@ fn test_buy_oracle_no_address() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Set Oracle rate source WITHOUT oracle address (impossible state)
     client._test_oracle_rate_only(&stablecoin.address);
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     // buy() should panic with "Oracle address not configured" (line 501)
     let buyer = Address::generate(&e);
@@ -2378,15 +2318,15 @@ fn test_buy_oracle_no_asset_code() {
     
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(&admin, &start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
+    client.open_sale(&start_time, &end_time, &1_000_000, &1_000_000, &10_000_000_0000000, &10_000000);
     
     let stablecoin = create_token_contract(&e, &admin);
-    client.support_asset(&admin, &stablecoin.address, &true);
+    client.support_asset(&stablecoin.address, &true);
     
     // Set Oracle rate source + address but NOT asset code (impossible state)
     let oracle_addr = create_mock_oracle(&e);
     client._test_oracle_addr_only(&stablecoin.address, &oracle_addr);
-    client.set_test_mode(&admin, &true);
+    client.set_test_mode(&true);
     
     // buy() should panic with "Oracle asset not configured" (line 505)
     let buyer = Address::generate(&e);
@@ -2406,9 +2346,7 @@ fn test_calculate_tokens_8_and_12_decimals() {
 
     let start_time = e.ledger().timestamp();
     let end_time = start_time + 10000;
-    client.open_sale(
-        &admin,
-        &start_time,
+    client.open_sale(&start_time,
         &end_time,
         &1_000_000,
         &1_000_000,
@@ -2418,15 +2356,15 @@ fn test_calculate_tokens_8_and_12_decimals() {
 
     // Test with 8-decimal token
     let mock_8 = e.register(mock_token::MockTokenCustomDec, (&8u32,));
-    client.support_asset(&admin, &mock_8, &true);
-    client.set_asset_rate(&admin, &mock_8, &1_000_000, &1_000_000, &8);
+    client.support_asset(&mock_8, &true);
+    client.set_asset_rate(&mock_8, &1_000_000, &1_000_000, &8);
     let result_8 = client.calculate_tokens(&mock_8, &100_00000000);
     assert!(result_8 > 0, "8-decimal token should produce tokens");
 
     // Test with 12-decimal token
     let mock_12 = e.register(mock_token::MockTokenCustomDec, (&12u32,));
-    client.support_asset(&admin, &mock_12, &true);
-    client.set_asset_rate(&admin, &mock_12, &1_000_000, &1_000_000, &12);
+    client.support_asset(&mock_12, &true);
+    client.set_asset_rate(&mock_12, &1_000_000, &1_000_000, &12);
     let result_12 = client.calculate_tokens(&mock_12, &100_000000000000);
     assert!(result_12 > 0, "12-decimal token should produce tokens");
 }

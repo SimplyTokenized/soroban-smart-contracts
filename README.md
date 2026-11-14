@@ -275,13 +275,13 @@ For the full deploy-order/wiring/verify procedure see [docs/DEPLOYMENT.md](docs/
 
 ## Dependencies
 
-- **Soroban SDK**: v22.0.8
-- **OpenZeppelin Stellar Contracts** (tag `v0.3.0`):
-  - stellar-fungible (token only)
-  - stellar-ownable + stellar-ownable-macro
-  - stellar-pausable + stellar-pausable-macros
-  - stellar-upgradeable + stellar-upgradeable-macros
-  - stellar-default-impl-macro
+- **Soroban SDK**: `=28.0.0` (exact-pinned)
+- **OpenZeppelin Stellar Contracts**: `=0.8.0` (crates.io, exact-pinned):
+  - stellar-tokens (token only: Fungible Base + Burnable + TotalSupply)
+  - stellar-access (ownable)
+  - stellar-contract-utils (pausable, upgradeable)
+  - stellar-macros (only_owner, when_not_paused)
+- **Stellar CLI**: ≥ v25.2.0 (required to build soroban-sdk 28 contracts)
 
 ## Documentation
 

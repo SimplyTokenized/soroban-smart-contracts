@@ -3,14 +3,11 @@
 #[cfg(test)]
 extern crate std;
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Bytes, Env, IntoVal, Symbol};
-use stellar_ownable::{self as ownable, Ownable};
-use stellar_ownable_macro::only_owner;
-use stellar_pausable::{self as pausable, Pausable};
-use stellar_pausable_macros::when_not_paused;
-use stellar_upgradeable::UpgradeableInternal;
-use stellar_upgradeable_macros::Upgradeable;
-use stellar_default_impl_macro::default_impl;
+use soroban_sdk::{contract, contractevent, contractimpl, contracttype, token, Address, Bytes, BytesN, Env, IntoVal, MuxedAddress, Symbol};
+use stellar_access::ownable::{self as ownable, Ownable};
+use stellar_contract_utils::pausable::{self as pausable, Pausable};
+use stellar_contract_utils::upgradeable::{self as upgradeable, Upgradeable};
+use stellar_macros::{only_owner, when_not_paused};
 
 // TTL constants for persistent storage (ledger-based)
 const MIN_TTL: u32 = 1_000_000;
@@ -88,6 +85,91 @@ pub struct PriceData {
     pub timestamp: u64,
 }
 
+// Event types
+#[contractevent(topics = ["sale_opened"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct SaleOpenedEvent {
+    pub config: SaleConfig,
+}
+
+#[contractevent(topics = ["asset_supported"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct AssetSupportedEvent {
+    #[topic]
+    pub asset_contract: Address,
+    pub enabled: bool,
+}
+
+#[contractevent(topics = ["asset_rate_set"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct AssetRateSetEvent {
+    #[topic]
+    pub asset_contract: Address,
+    pub rate: AssetRate,
+}
+
+#[contractevent(topics = ["asset_rate_removed"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct AssetRateRemovedEvent {
+    #[topic]
+    pub asset_contract: Address,
+    pub removed: bool,
+}
+
+#[contractevent(topics = ["asset_oracle_configured"], data_format = "vec")]
+#[derive(Clone)]
+pub struct AssetOracleConfiguredEvent {
+    #[topic]
+    pub asset_contract: Address,
+    pub oracle_address: Address,
+    pub asset: Asset,
+}
+
+#[contractevent(topics = ["asset_manual_mode"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct AssetManualModeEvent {
+    #[topic]
+    pub asset_contract: Address,
+    pub enabled: bool,
+}
+
+#[contractevent(topics = ["whitelist_updated"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct WhitelistUpdatedEvent {
+    #[topic]
+    pub buyer: Address,
+    pub whitelisted: bool,
+}
+
+#[contractevent(topics = ["whitelist_required_updated"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct WhitelistRequirementUpdatedEvent {
+    pub required: bool,
+}
+
+#[contractevent(topics = ["treasury_updated"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct TreasuryUpdatedEvent {
+    pub treasury: Address,
+}
+
+#[contractevent(topics = ["emergency_sale_reset"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct EmergencySaleResetEvent {
+    pub reset: bool,
+}
+
+#[contractevent(topics = ["tokens_purchased"], data_format = "vec")]
+#[derive(Clone)]
+pub struct TokensPurchasedEvent {
+    #[topic]
+    pub buyer: Address,
+    #[topic]
+    pub asset_contract: Address,
+    pub amount: i128,
+    pub tokens: i128,
+}
+
 // Simple SEP-40 oracle client
 pub struct OracleClient<'a> {
     env: &'a Env,
@@ -120,7 +202,6 @@ impl<'a> OracleClient<'a> {
     }
 }
 
-#[derive(Upgradeable)]
 #[contract]
 pub struct CrowdsaleContract;
 
@@ -170,7 +251,6 @@ impl CrowdsaleContract {
     #[when_not_paused]
     pub fn open_sale(
         e: &Env,
-        _caller: Address,
         start_time: u64,
         end_time: u64,
         price_numerator: i128,
@@ -235,9 +315,8 @@ impl CrowdsaleContract {
                 &min_tokens_received,
             );
 
-        e.events().publish(
-            (Symbol::new(e, "sale_opened"),),
-            SaleConfig {
+        SaleOpenedEvent {
+            config: SaleConfig {
                 start_time,
                 end_time,
                 price_numerator,
@@ -245,20 +324,22 @@ impl CrowdsaleContract {
                 global_cap,
                 min_tokens_received,
             },
-        );
+        }
+        .publish(e);
     }
 
     /// Add or remove supported stablecoin asset (owner only)
     #[only_owner]
-    pub fn support_asset(e: &Env, _caller: Address, asset_contract: Address, enabled: bool) {
+    pub fn support_asset(e: &Env, asset_contract: Address, enabled: bool) {
         e.storage()
             .persistent()
             .set(&DataKey::SupportedAsset(asset_contract.clone()), &enabled);
 
-        e.events().publish(
-            (Symbol::new(e, "asset_supported"), asset_contract.clone()),
+        AssetSupportedEvent {
+            asset_contract: asset_contract.clone(),
             enabled,
-        );
+        }
+        .publish(e);
     }
 
     /// Set test mode to skip token transfers (owner only, for testing)
@@ -267,7 +348,7 @@ impl CrowdsaleContract {
     /// When enabled, token transfers and mint calls are skipped, which is useful for testing
     /// without requiring full token contract setup. This should NEVER be enabled in production.
     #[only_owner]
-    pub fn set_test_mode(e: &Env, _caller: Address, enabled: bool) {
+    pub fn set_test_mode(e: &Env, enabled: bool) {
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, TEST_MODE_KEY.as_bytes()), &enabled);
@@ -285,7 +366,6 @@ impl CrowdsaleContract {
     #[only_owner]
     pub fn set_asset_rate(
         e: &Env,
-        _caller: Address,
         asset_contract: Address,
         rate_numerator: i128,
         rate_denominator: i128,
@@ -305,30 +385,31 @@ impl CrowdsaleContract {
             .persistent()
             .set(&DataKey::AssetRate(asset_contract.clone()), &rate);
 
-        e.events().publish(
-            (Symbol::new(e, "asset_rate_set"), asset_contract.clone()),
+        AssetRateSetEvent {
+            asset_contract: asset_contract.clone(),
             rate,
-        );
+        }
+        .publish(e);
     }
 
     /// Remove rate for a specific asset (owner only)
     #[only_owner]
-    pub fn remove_asset_rate(e: &Env, _caller: Address, asset_contract: Address) {
+    pub fn remove_asset_rate(e: &Env, asset_contract: Address) {
         e.storage()
             .persistent()
             .remove(&DataKey::AssetRate(asset_contract.clone()));
 
-        e.events().publish(
-            (Symbol::new(e, "asset_rate_removed"), asset_contract.clone()),
-            true,
-        );
+        AssetRateRemovedEvent {
+            asset_contract: asset_contract.clone(),
+            removed: true,
+        }
+        .publish(e);
     }
 
     /// Configure SEP-40 oracle for a specific asset (owner only)
     #[only_owner]
     pub fn set_asset_oracle(
         e: &Env,
-        _caller: Address,
         asset_contract: Address,
         oracle_address: Address,
         asset: Asset,
@@ -344,28 +425,31 @@ impl CrowdsaleContract {
             .persistent()
             .set(&DataKey::OracleAssetCode(asset_contract.clone()), &asset);
 
-        e.events().publish(
-            (Symbol::new(e, "asset_oracle_configured"), asset_contract.clone()),
-            (oracle_address.clone(), asset.clone()),
-        );
+        AssetOracleConfiguredEvent {
+            asset_contract: asset_contract.clone(),
+            oracle_address,
+            asset,
+        }
+        .publish(e);
     }
 
     /// Revert an asset to manual rate mode (owner only)
     #[only_owner]
-    pub fn set_asset_manual(e: &Env, _caller: Address, asset_contract: Address) {
+    pub fn set_asset_manual(e: &Env, asset_contract: Address) {
         e.storage()
             .persistent()
             .set(&DataKey::AssetRateSource(asset_contract.clone()), &RateSource::Manual);
 
-        e.events().publish(
-            (Symbol::new(e, "asset_manual_mode"), asset_contract.clone()),
-            true,
-        );
+        AssetManualModeEvent {
+            asset_contract: asset_contract.clone(),
+            enabled: true,
+        }
+        .publish(e);
     }
 
     /// Set whitelist status for buyer (owner only)
     #[only_owner]
-    pub fn set_whitelist(e: &Env, _caller: Address, buyer: Address, whitelisted: bool) {
+    pub fn set_whitelist(e: &Env, buyer: Address, whitelisted: bool) {
         if whitelisted {
             e.storage()
                 .persistent()
@@ -376,28 +460,26 @@ impl CrowdsaleContract {
                 .remove(&DataKey::Whitelist(buyer.clone()));
         }
 
-        e.events().publish(
-            (Symbol::new(e, "whitelist_updated"), buyer.clone()),
+        WhitelistUpdatedEvent {
+            buyer: buyer.clone(),
             whitelisted,
-        );
+        }
+        .publish(e);
     }
 
     /// Set whitelist requirement flag (owner only)
     #[only_owner]
-    pub fn set_whitelist_required(e: &Env, _caller: Address, required: bool) {
+    pub fn set_whitelist_required(e: &Env, required: bool) {
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, WHITELIST_REQUIRED_KEY.as_bytes()), &required);
 
-        e.events().publish(
-            (Symbol::new(e, "whitelist_required_updated"),),
-            required,
-        );
+        WhitelistRequirementUpdatedEvent { required }.publish(e);
     }
 
     /// Set per-user contribution cap (owner only)
     #[only_owner]
-    pub fn set_user_cap(e: &Env, _caller: Address, buyer: Address, cap: i128) {
+    pub fn set_user_cap(e: &Env, buyer: Address, cap: i128) {
         e.storage()
             .persistent()
             .set(&DataKey::UserCap(buyer.clone()), &cap);
@@ -405,32 +487,29 @@ impl CrowdsaleContract {
 
     /// Update treasury address (owner only)
     #[only_owner]
-    pub fn update_treasury(e: &Env, _caller: Address, new_treasury: Address) {
+    pub fn update_treasury(e: &Env, new_treasury: Address) {
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, TREASURY_KEY.as_bytes()), &new_treasury);
 
-        e.events().publish(
-            (Symbol::new(e, "treasury_updated"),),
-            new_treasury,
-        );
+        TreasuryUpdatedEvent {
+            treasury: new_treasury,
+        }
+        .publish(e);
     }
 
     /// Emergency reset sale state (owner only, for recovery from bad state transitions)
     /// WARNING: This should only be used in emergency situations to reset TOTAL_SOLD to 0
     /// Use with caution as it affects the sale's progress tracking
     #[only_owner]
-    pub fn emergency_reset_sale(e: &Env, _caller: Address) {
+    pub fn emergency_reset_sale(e: &Env) {
         // Reset TOTAL_SOLD to 0
         e.storage()
             .persistent()
             .set(&Bytes::from_slice(e, TOTAL_SOLD_KEY.as_bytes()), &0i128);
 
         // Emit event for audit trail
-        e.events().publish(
-            (Symbol::new(e, "emergency_sale_reset"),),
-            true,
-        );
+        EmergencySaleResetEvent { reset: true }.publish(e);
     }
 
     /// Main buy function - purchase tokens with supported stablecoin
@@ -490,85 +569,12 @@ impl CrowdsaleContract {
             }
         }
         
-        // Calculate tokens based on rate source
-        let tokens = match e.storage().persistent().get::<DataKey, RateSource>(
-            &DataKey::AssetRateSource(asset_contract.clone())
-        ) {
-            Some(RateSource::Oracle) => {
-                // Fetch price from SEP-40 oracle
-                let oracle_address = e.storage().persistent()
-                    .get(&DataKey::OracleAddress(asset_contract.clone()))
-                    .unwrap_or_else(|| panic!("Oracle address not configured"));
-
-                let asset = e.storage().persistent()
-                    .get(&DataKey::OracleAssetCode(asset_contract.clone()))
-                    .unwrap_or_else(|| panic!("Oracle asset not configured"));
-
-                // Create SEP-40 client and fetch price
-                let oracle_client = OracleClient::new(e, &oracle_address);
-                let price_data = oracle_client.lastprice(&asset);
-
-                if price_data.is_none() {
-                    panic!("Oracle price not available");
-                }
-
-                let price_data = price_data.unwrap();
-                let oracle_price = price_data.price;
-                
-                // Staleness check: reject prices older than 1 hour (3600 seconds)
-                let current_time = e.ledger().timestamp();
-                if current_time.saturating_sub(price_data.timestamp) > 3600 {
-                    panic!("Oracle price too stale");
-                }
-                
-                // Zero price check before division
-                if oracle_price <= 0 {
-                    panic!("Invalid oracle price: must be positive");
-                }
-                
-                // Get oracle decimal precision
-                let oracle_decimals = oracle_client.decimals();
-                
-                // Exponent guard: prevent overflow from large decimals
-                if oracle_decimals >= 39 {
-                    panic!("Oracle decimals too large");
-                }
-                
-                // Convert payment amount to base currency using correct SEP-40 formula
-                // base_amount = (amount * 10^oracle_decimals) / oracle_price
-                let base_amount = (amount * 10i128.pow(oracle_decimals)) / oracle_price;
-                
-                // Apply fixed offering price (price_num/price_den) to calculate tokens
-                let price_num: i128 = e.storage().persistent()
-                    .get(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()))
-                    .unwrap();
-                let price_den: i128 = e.storage().persistent()
-                    .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
-                    .unwrap();
-                
-                (base_amount * price_num) / price_den
-            },
-            Some(RateSource::Manual) | None => {
-                // Use manual rate (default behavior)
-                if let Some(asset_rate) = e.storage().persistent()
-                    .get::<DataKey, AssetRate>(&DataKey::AssetRate(asset_contract.clone()))
-                {
-                    (amount * asset_rate.rate_numerator) / asset_rate.rate_denominator
-                } else {
-                    // Fallback to global price
-                    let price_num: i128 = e.storage().persistent()
-                        .get(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()))
-                        .unwrap();
-
-                    let price_den: i128 = e.storage().persistent()
-                        .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
-                        .unwrap();
-
-                    (amount * price_num) / price_den
-                }
-            }
+        // Calculate tokens based on rate source (shared logic with calculate_tokens)
+        let tokens = match Self::_compute_tokens(e, &asset_contract, amount) {
+            Ok(t) => t,
+            Err(m) => panic!("{}", m),
         };
-        
+
         if tokens <= 0 {
             panic!("Invalid token amount");
         }
@@ -635,7 +641,7 @@ impl CrowdsaleContract {
             .unwrap_or(false);
         
         if !test_mode {
-            stablecoin_client.transfer(&buyer, &treasury, &amount);
+            stablecoin_client.transfer(&buyer, &MuxedAddress::from(&treasury), &amount);
         }
         
         // Mint tokens to buyer (requires this contract to have minter role)
@@ -671,17 +677,113 @@ impl CrowdsaleContract {
                 &(total_sold + tokens),
             );
 
-        e.events().publish(
-            (
-                Symbol::new(e, "tokens_purchased"),
-                buyer.clone(),
-                asset_contract.clone(),
-            ),
-            (amount, tokens),
-        );
+        TokensPurchasedEvent {
+            buyer: buyer.clone(),
+            asset_contract: asset_contract.clone(),
+            amount,
+            tokens,
+        }
+        .publish(e);
     }
 
-    
+    /// Shared token pricing for buy() and calculate_tokens().
+    /// Operates on the raw payment amount in the payment asset's base units.
+    /// Returns Err(msg) for every configuration/oracle failure so callers can
+    /// choose between panicking (buy) and returning 0 (quote view).
+    fn _compute_tokens(
+        e: &Env,
+        asset_contract: &Address,
+        payment_amount: i128,
+    ) -> Result<i128, &'static str> {
+        match e.storage().persistent().get::<DataKey, RateSource>(
+            &DataKey::AssetRateSource(asset_contract.clone())
+        ) {
+            Some(RateSource::Oracle) => {
+                // Fetch price from SEP-40 oracle
+                let oracle_address = e.storage().persistent()
+                    .get(&DataKey::OracleAddress(asset_contract.clone()))
+                    .ok_or("Oracle address not configured")?;
+
+                let asset = e.storage().persistent()
+                    .get(&DataKey::OracleAssetCode(asset_contract.clone()))
+                    .ok_or("Oracle asset not configured")?;
+
+                // Create SEP-40 client and fetch price
+                let oracle_client = OracleClient::new(e, &oracle_address);
+                let price_data = oracle_client
+                    .lastprice(&asset)
+                    .ok_or("Oracle price not available")?;
+
+                let oracle_price = price_data.price;
+
+                // Staleness check: reject prices older than 1 hour (3600 seconds)
+                let current_time = e.ledger().timestamp();
+                if current_time.saturating_sub(price_data.timestamp) > 3600 {
+                    return Err("Oracle price too stale");
+                }
+
+                // Zero price check before division
+                if oracle_price <= 0 {
+                    return Err("Invalid oracle price: must be positive");
+                }
+
+                // Get oracle decimal precision
+                let oracle_decimals = oracle_client.decimals();
+
+                // Exponent guard: prevent overflow from large decimals
+                if oracle_decimals >= 39 {
+                    return Err("Oracle decimals too large");
+                }
+
+                // Convert payment amount to base currency using correct SEP-40 formula
+                // base_amount = (amount * 10^oracle_decimals) / oracle_price
+                let base_amount = payment_amount
+                    .checked_mul(10i128.pow(oracle_decimals))
+                    .ok_or("Oracle amount overflow")?
+                    / oracle_price;
+
+                // Apply fixed offering price (price_num/price_den) to calculate tokens
+                let price_num: i128 = e.storage().persistent()
+                    .get(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()))
+                    .ok_or("Sale price not configured")?;
+                let price_den: i128 = e.storage().persistent()
+                    .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
+                    .ok_or("Sale price not configured")?;
+
+                if price_den <= 0 {
+                    return Err("Sale price not configured");
+                }
+
+                Ok((base_amount * price_num) / price_den)
+            },
+            Some(RateSource::Manual) | None => {
+                // Use manual rate (default behavior)
+                if let Some(asset_rate) = e.storage().persistent()
+                    .get::<DataKey, AssetRate>(&DataKey::AssetRate(asset_contract.clone()))
+                {
+                    if asset_rate.rate_denominator <= 0 {
+                        return Err("Invalid asset rate");
+                    }
+                    Ok((payment_amount * asset_rate.rate_numerator) / asset_rate.rate_denominator)
+                } else {
+                    // Fallback to global price
+                    let price_num: i128 = e.storage().persistent()
+                        .get(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()))
+                        .unwrap_or(0i128);
+                    let price_den: i128 = e.storage().persistent()
+                        .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
+                        .unwrap_or(1i128);
+
+                    if price_num <= 0 || price_den <= 0 {
+                        return Err("Price not configured");
+                    }
+
+                    Ok((payment_amount * price_num) / price_den)
+                }
+            }
+        }
+    }
+
     // ========== View Functions ==========
 
     pub fn get_sale_config(e: &Env) -> SaleConfig {
@@ -804,113 +906,16 @@ impl CrowdsaleContract {
         treasury
     }
 
-    /// Calculate tokens for a given payment amount using the asset's rate
+    /// Calculate tokens for a given payment amount using the asset's rate.
+    /// Uses the exact same pricing as buy() (raw payment amount in base units),
+    /// so quotes always match executed amounts. Returns 0 instead of panicking
+    /// on any pricing failure.
     pub fn calculate_tokens(e: &Env, asset_contract: Address, payment_amount: i128) -> i128 {
         if payment_amount <= 0 {
             return 0i128;
         }
 
-        // Get payment asset decimals for normalization
-        let payment_decimals: u32 = {
-            let token_client = token::Client::new(e, &asset_contract);
-            token_client.decimals()
-        };
-
-        // Normalize payment amount to 18 decimal places (standard precision)
-        let normalized_amount = if payment_decimals < 18 {
-            payment_amount * 10i128.pow(18 - payment_decimals)
-        } else if payment_decimals > 18 {
-            payment_amount / 10i128.pow(payment_decimals - 18)
-        } else {
-            payment_amount
-        };
-
-        // Calculate tokens based on rate source (same logic as buy())
-        match e.storage().persistent().get::<DataKey, RateSource>(
-            &DataKey::AssetRateSource(asset_contract.clone())
-        ) {
-            Some(RateSource::Oracle) => {
-                // Fetch price from SEP-40 oracle
-                let oracle_address = match e.storage().persistent()
-                    .get(&DataKey::OracleAddress(asset_contract.clone()))
-                {
-                    Some(addr) => addr,
-                    None => return 0i128,
-                };
-
-                let asset = match e.storage().persistent()
-                    .get(&DataKey::OracleAssetCode(asset_contract.clone()))
-                {
-                    Some(a) => a,
-                    None => return 0i128,
-                };
-
-                // Create SEP-40 client and fetch price
-                let oracle_client = OracleClient::new(e, &oracle_address);
-                let price_data = oracle_client.lastprice(&asset);
-
-                if price_data.is_none() {
-                    return 0i128;
-                }
-
-                let price_data = price_data.unwrap();
-                let oracle_price = price_data.price;
-
-                // Staleness check: reject prices older than 1 hour (3600 seconds)
-                let current_time = e.ledger().timestamp();
-                if current_time.saturating_sub(price_data.timestamp) > 3600 {
-                    return 0i128;
-                }
-
-                // Zero price check before division
-                if oracle_price <= 0 {
-                    return 0i128;
-                }
-
-                // Get oracle decimal precision
-                let oracle_decimals = oracle_client.decimals();
-
-                // Exponent guard: prevent overflow from large decimals
-                if oracle_decimals >= 39 {
-                    return 0i128;
-                }
-
-                // Convert normalized payment amount to base currency using correct SEP-40 formula
-                let base_amount = (normalized_amount * 10i128.pow(oracle_decimals)) / oracle_price;
-                
-                // Apply fixed offering price (price_num/price_den) to calculate tokens
-                let price_num: i128 = e.storage().persistent()
-                    .get(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()))
-                    .unwrap_or(1i128);
-                let price_den: i128 = e.storage().persistent()
-                    .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
-                    .unwrap_or(1i128);
-                
-                (base_amount * price_num) / price_den
-            },
-            Some(RateSource::Manual) | None => {
-                // Use manual rate (default behavior)
-                if let Some(asset_rate) = e.storage().persistent()
-                    .get::<DataKey, AssetRate>(&DataKey::AssetRate(asset_contract))
-                {
-                    (normalized_amount * asset_rate.rate_numerator) / asset_rate.rate_denominator
-                } else {
-                    // Fallback to global price
-                    let price_num: i128 = e.storage().persistent()
-                        .get(&Bytes::from_slice(e, PRICE_NUM_KEY.as_bytes()))
-                        .unwrap_or(0i128);
-                    let price_den: i128 = e.storage().persistent()
-                        .get(&Bytes::from_slice(e, PRICE_DEN_KEY.as_bytes()))
-                        .unwrap_or(1i128);
-
-                    if price_num == 0 {
-                        return 0i128;
-                    }
-
-                    (normalized_amount * price_num) / price_den
-                }
-            }
-        }
+        Self::_compute_tokens(e, &asset_contract, payment_amount).unwrap_or(0i128)
     }
 
     /// Get rate information for an asset
@@ -936,44 +941,33 @@ impl CrowdsaleContract {
 //
 // ─── Pausable Implementation ─────────────────────────────────────────────────
 //
-#[contractimpl]
+#[contractimpl(contracttrait)]
 impl Pausable for CrowdsaleContract {
-    fn paused(e: &Env) -> bool {
-        pausable::paused(e)
-    }
-
     #[only_owner]
     fn pause(e: &Env, _caller: Address) {
         pausable::pause(e);
-        e.events().publish(
-            (Symbol::new(e, "paused"),),
-            e.ledger().timestamp(),
-        );
     }
 
     #[only_owner]
     fn unpause(e: &Env, _caller: Address) {
         pausable::unpause(e);
-        e.events().publish(
-            (Symbol::new(e, "unpaused"),),
-            e.ledger().timestamp(),
-        );
     }
 }
 
 //
 // ─── Ownable Implementation ──────────────────────────────────────────────────
 //
-#[default_impl]
-#[contractimpl]
+#[contractimpl(contracttrait)]
 impl Ownable for CrowdsaleContract {}
 
 //
 // ─── Upgradeable Implementation ──────────────────────────────────────────────
 //
-impl UpgradeableInternal for CrowdsaleContract {
-    fn _require_auth(e: &Env, _operator: &Address) {
-        ownable::enforce_owner_auth(e);
+#[contractimpl]
+impl Upgradeable for CrowdsaleContract {
+    #[only_owner]
+    fn upgrade(e: &Env, new_wasm_hash: BytesN<32>, _operator: Address) {
+        upgradeable::upgrade(e, &new_wasm_hash);
     }
 }
 

@@ -108,7 +108,7 @@ fn test_mint_and_burn() {
     let client = create_token_contract(&e, &admin, "Test Token", "TEST", 7, 1_000_000_0000000);
     
     // Admin adds minter role
-    client.set_minter(&admin, &minter, &true);
+    client.set_minter(&minter, &true);
     
     // Minter mints tokens to Alice
     let alice = Address::generate(&e);
@@ -157,11 +157,11 @@ fn test_whitelist() {
     assert!(!client.is_whitelisted(&user));
     
     // Whitelist the user
-    client.set_whitelist(&admin, &user, &true);
+    client.set_whitelist(&user, &true);
     assert!(client.is_whitelisted(&user));
     
     // Remove from whitelist
-    client.set_whitelist(&admin, &user, &false);
+    client.set_whitelist(&user, &false);
     assert!(!client.is_whitelisted(&user));
 }
 
@@ -216,7 +216,7 @@ fn test_update_cap() {
     
     // Update the cap
     let new_cap = initial_cap * 2;
-    client.set_cap(&admin, &new_cap);
+    client.set_cap(&new_cap);
     
     // Verify new cap
     assert_eq!(client.cap(), new_cap);
@@ -234,7 +234,7 @@ fn test_mint_exceeds_cap() {
     
     // Set cap to current total supply
     let current_supply = client.total_supply();
-    client.set_cap(&admin, &current_supply);
+    client.set_cap(&current_supply);
     
     // Try to mint more than the cap (should panic)
     client.mint(&admin, &admin, &1);
@@ -252,11 +252,11 @@ fn test_set_whitelist_required() {
     assert_eq!(client.is_whitelist_required(), false);
     
     // Set to true
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     assert_eq!(client.is_whitelist_required(), true);
     
     // Set back to false
-    client.set_whitelist_required(&admin, &false);
+    client.set_whitelist_required(&false);
     assert_eq!(client.is_whitelist_required(), false);
 }
 
@@ -352,7 +352,7 @@ fn test_transfer_with_whitelist_required() {
     let client = create_token_contract(&e, &admin, "Test Token", "TEST", 7, 1_000_000_0000000);
     
     // Enable whitelist requirement
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     let alice = Address::generate(&e);
     let transfer_amount = 100_0000;
@@ -370,9 +370,9 @@ fn test_transfer_with_whitelist_when_whitelisted() {
     let client = create_token_contract(&e, &admin, "Test Token", "TEST", 7, 1_000_000_0000000);
     
     // Enable whitelist requirement and whitelist the user
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     let alice = Address::generate(&e);
-    client.set_whitelist(&admin, &alice, &true);
+    client.set_whitelist(&alice, &true);
     
     let transfer_amount = 100_0000;
     
@@ -394,7 +394,7 @@ fn test_mint_with_whitelist_required() {
     let client = create_token_contract(&e, &admin, "Test Token", "TEST", 7, 1_000_000_0000000);
     
     // Enable whitelist requirement
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     let alice = Address::generate(&e);
     let mint_amount = 500_0000;
@@ -416,13 +416,13 @@ fn test_set_minter() {
     let minter = Address::generate(&e);
     
     // Set as minter
-    client.set_minter(&admin, &minter, &true);
+    client.set_minter(&minter, &true);
     
     // Now is a minter
     assert!(client.is_minter(&minter));
     
     // Revoke minter role
-    client.set_minter(&admin, &minter, &false);
+    client.set_minter(&minter, &false);
     
     // No longer a minter (should return false, not panic)
     assert!(!client.is_minter(&minter));
@@ -454,13 +454,13 @@ fn test_is_whitelist_required() {
     assert!(!client.is_whitelist_required());
     
     // Enable whitelist requirement
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Now whitelist is required
     assert!(client.is_whitelist_required());
     
     // Disable whitelist requirement
-    client.set_whitelist_required(&admin, &false);
+    client.set_whitelist_required(&false);
     
     // No longer required
     assert!(!client.is_whitelist_required());
@@ -500,7 +500,7 @@ fn test_burn_from() {
     let spender = Address::generate(&e);
     
     // Set admin as minter
-    client.set_minter(&admin, &admin, &true);
+    client.set_minter(&admin, &true);
     
     // Mint tokens to owner
     client.mint(&admin, &owner, &1000_0000000);
@@ -567,7 +567,7 @@ fn test_total_supply() {
     
     // Mint tokens
     let recipient = Address::generate(&e);
-    client.set_minter(&admin, &admin, &true);
+    client.set_minter(&admin, &true);
     client.mint(&admin, &recipient, &1000_0000000);
     
     // Verify total supply increased
@@ -585,7 +585,7 @@ fn test_burn() {
     let holder = Address::generate(&e);
     
     // Set admin as minter
-    client.set_minter(&admin, &admin, &true);
+    client.set_minter(&admin, &true);
     
     // Mint tokens to holder
     client.mint(&admin, &holder, &1000_0000000);
@@ -646,7 +646,7 @@ fn test_transfer_to_same_address() {
     let holder = Address::generate(&e);
     
     // Set admin as minter
-    client.set_minter(&admin, &admin, &true);
+    client.set_minter(&admin, &true);
     
     // Mint tokens to holder
     client.mint(&admin, &holder, &1000_0000000);
@@ -669,7 +669,7 @@ fn test_burn_zero_amount() {
     let holder = Address::generate(&e);
     
     // Set admin as minter
-    client.set_minter(&admin, &admin, &true);
+    client.set_minter(&admin, &true);
     
     // Mint tokens to holder
     client.mint(&admin, &holder, &1000_0000000);
@@ -696,7 +696,7 @@ fn test_burn_from_when_paused() {
     let spender = Address::generate(&e);
     
     // Set admin as minter
-    client.set_minter(&admin, &admin, &true);
+    client.set_minter(&admin, &true);
     
     // Mint tokens to holder
     client.mint(&admin, &holder, &1000_0000000);
@@ -724,7 +724,7 @@ fn test_burn_from_with_whitelist_required() {
     let spender = Address::generate(&e);
     
     // Set admin as minter
-    client.set_minter(&admin, &admin, &true);
+    client.set_minter(&admin, &true);
     
     // Mint tokens to holder
     client.mint(&admin, &holder, &1000_0000000);
@@ -733,10 +733,10 @@ fn test_burn_from_with_whitelist_required() {
     client.approve(&holder, &spender, &500_0000000, &1000000);
     
     // Enable whitelist requirement
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Whitelist spender but not holder
-    client.set_whitelist(&admin, &spender, &true);
+    client.set_whitelist(&spender, &true);
     
     // Try to burn from when holder is not whitelisted (should panic)
     client.burn_from(&spender, &holder, &100_0000000);
@@ -755,7 +755,7 @@ fn test_burn_from_spender_not_whitelisted() {
     let spender = Address::generate(&e);
     
     // Set admin as minter
-    client.set_minter(&admin, &admin, &true);
+    client.set_minter(&admin, &true);
     
     // Mint tokens to holder
     client.mint(&admin, &holder, &1000_0000000);
@@ -764,10 +764,10 @@ fn test_burn_from_spender_not_whitelisted() {
     client.approve(&holder, &spender, &500_0000000, &1000000);
     
     // Enable whitelist requirement
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Whitelist holder but not spender
-    client.set_whitelist(&admin, &holder, &true);
+    client.set_whitelist(&holder, &true);
     
     // Try to burn from when spender is not whitelisted (should panic)
     client.burn_from(&spender, &holder, &100_0000000);
@@ -792,13 +792,13 @@ fn test_minter_role_checks() {
     assert!(!client.is_minter(&other));
     
     // Set another address as minter
-    client.set_minter(&admin, &minter, &true);
+    client.set_minter(&minter, &true);
     
     // Now minter should be a minter
     assert!(client.is_minter(&minter));
     
     // Remove minter role from the minter address
-    client.set_minter(&admin, &minter, &false);
+    client.set_minter(&minter, &false);
     
     // Minter should no longer be a minter
     assert!(!client.is_minter(&minter));
@@ -816,15 +816,15 @@ fn test_whitelist_edge_cases() {
     assert!(!client.is_whitelist_required());
     
     // Enable whitelist requirement
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     assert!(client.is_whitelist_required());
     
     // Disable whitelist requirement
-    client.set_whitelist_required(&admin, &false);
+    client.set_whitelist_required(&false);
     assert!(!client.is_whitelist_required());
     
     // Enable again
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     assert!(client.is_whitelist_required());
 }
 
@@ -842,7 +842,7 @@ fn test_transfer_edge_cases() {
     let to = Address::generate(&e);
     
     // Set admin as minter
-    client.set_minter(&admin, &admin, &true);
+    client.set_minter(&admin, &true);
     
     // Mint tokens to from
     client.mint(&admin, &from, &1000_0000000);
@@ -896,7 +896,7 @@ fn test_burn_edge_cases() {
     let holder = Address::generate(&e);
     
     // Set admin as minter
-    client.set_minter(&admin, &admin, &true);
+    client.set_minter(&admin, &true);
     
     // Mint tokens to holder
     client.mint(&admin, &holder, &1000_0000000);
@@ -953,11 +953,11 @@ fn test_whitelist_multiple_accounts() {
     let account3 = Address::generate(&e);
     
     // Enable whitelist requirement
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Whitelist multiple accounts
-    client.set_whitelist(&admin, &account1, &true);
-    client.set_whitelist(&admin, &account2, &true);
+    client.set_whitelist(&account1, &true);
+    client.set_whitelist(&account2, &true);
     
     // Verify whitelist status
     assert!(client.is_whitelisted(&account1));
@@ -965,7 +965,7 @@ fn test_whitelist_multiple_accounts() {
     assert!(!client.is_whitelisted(&account3));
     
     // Remove from whitelist
-    client.set_whitelist(&admin, &account1, &false);
+    client.set_whitelist(&account1, &false);
     
     // Verify removal
     assert!(!client.is_whitelisted(&account1));
@@ -1044,12 +1044,12 @@ fn test_transfer_from_with_whitelist_all_whitelisted() {
     let recipient = Address::generate(&e);
     
     // Enable whitelist
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Whitelist all parties
-    client.set_whitelist(&admin, &owner, &true);
-    client.set_whitelist(&admin, &spender, &true);
-    client.set_whitelist(&admin, &recipient, &true);
+    client.set_whitelist(&owner, &true);
+    client.set_whitelist(&spender, &true);
+    client.set_whitelist(&recipient, &true);
     
     // Mint tokens to owner
     client.mint(&admin, &owner, &1000_0000000);
@@ -1078,11 +1078,11 @@ fn test_transfer_from_with_whitelist_sender_not_whitelisted() {
     let recipient = Address::generate(&e);
     
     // Enable whitelist
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Whitelist owner and recipient but NOT spender
-    client.set_whitelist(&admin, &owner, &true);
-    client.set_whitelist(&admin, &recipient, &true);
+    client.set_whitelist(&owner, &true);
+    client.set_whitelist(&recipient, &true);
     
     // Mint and approve
     client.mint(&admin, &owner, &1000_0000000);
@@ -1106,11 +1106,11 @@ fn test_transfer_from_with_whitelist_recipient_not_whitelisted() {
     let recipient = Address::generate(&e);
     
     // Enable whitelist
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Whitelist owner and spender but NOT recipient
-    client.set_whitelist(&admin, &owner, &true);
-    client.set_whitelist(&admin, &spender, &true);
+    client.set_whitelist(&owner, &true);
+    client.set_whitelist(&spender, &true);
     
     // Mint and approve
     client.mint(&admin, &owner, &1000_0000000);
@@ -1134,11 +1134,11 @@ fn test_transfer_from_with_whitelist_spender_not_whitelisted() {
     let recipient = Address::generate(&e);
     
     // Enable whitelist
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Whitelist owner and recipient but NOT spender
-    client.set_whitelist(&admin, &owner, &true);
-    client.set_whitelist(&admin, &recipient, &true);
+    client.set_whitelist(&owner, &true);
+    client.set_whitelist(&recipient, &true);
     
     // Mint and approve
     client.mint(&admin, &owner, &1000_0000000);
@@ -1160,14 +1160,14 @@ fn test_burn_with_whitelist_not_whitelisted() {
     let account = Address::generate(&e);
     
     // Enable whitelist
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Mint tokens to account (admin is whitelisted by default)
-    client.set_whitelist(&admin, &account, &true);
+    client.set_whitelist(&account, &true);
     client.mint(&admin, &account, &1000_0000000);
     
     // Remove from whitelist
-    client.set_whitelist(&admin, &account, &false);
+    client.set_whitelist(&account, &false);
     
     // Should panic - account not whitelisted
     client.burn(&account, &500_0000000);
@@ -1186,10 +1186,10 @@ fn test_burn_from_with_whitelist_spender_not_whitelisted() {
     let spender = Address::generate(&e);
     
     // Enable whitelist
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Whitelist owner but NOT spender
-    client.set_whitelist(&admin, &owner, &true);
+    client.set_whitelist(&owner, &true);
     
     // Mint and approve
     client.mint(&admin, &owner, &1000_0000000);
@@ -1212,15 +1212,15 @@ fn test_transfer_sender_not_whitelisted() {
     let recipient = Address::generate(&e);
     
     // Enable whitelist
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Whitelist recipient but NOT sender
-    client.set_whitelist(&admin, &recipient, &true);
+    client.set_whitelist(&recipient, &true);
     
     // Mint to sender (while whitelisted), then remove
-    client.set_whitelist(&admin, &sender, &true);
+    client.set_whitelist(&sender, &true);
     client.mint(&admin, &sender, &1000_0000000);
-    client.set_whitelist(&admin, &sender, &false);
+    client.set_whitelist(&sender, &false);
     
     // Should panic - sender not whitelisted
     client.transfer(&sender, &recipient, &500_0000000);
@@ -1237,10 +1237,10 @@ fn test_burn_with_whitelist_whitelisted() {
     let account = Address::generate(&e);
     
     // Enable whitelist
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Whitelist account
-    client.set_whitelist(&admin, &account, &true);
+    client.set_whitelist(&account, &true);
     
     // Mint tokens
     client.mint(&admin, &account, &1000_0000000);
@@ -1263,11 +1263,11 @@ fn test_burn_from_with_whitelist_all_whitelisted() {
     let spender = Address::generate(&e);
     
     // Enable whitelist
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Whitelist both
-    client.set_whitelist(&admin, &owner, &true);
-    client.set_whitelist(&admin, &spender, &true);
+    client.set_whitelist(&owner, &true);
+    client.set_whitelist(&spender, &true);
     
     // Mint and approve
     client.mint(&admin, &owner, &1000_0000000);
@@ -1376,17 +1376,17 @@ fn test_transfer_from_with_whitelist_from_not_whitelisted() {
     let recipient = Address::generate(&e);
     
     // Enable whitelist
-    client.set_whitelist_required(&admin, &true);
+    client.set_whitelist_required(&true);
     
     // Whitelist spender and recipient but NOT owner (from)
-    client.set_whitelist(&admin, &spender, &true);
-    client.set_whitelist(&admin, &recipient, &true);
+    client.set_whitelist(&spender, &true);
+    client.set_whitelist(&recipient, &true);
     
     // Mint and approve (mint while owner is whitelisted, then remove)
-    client.set_whitelist(&admin, &owner, &true);
+    client.set_whitelist(&owner, &true);
     client.mint(&admin, &owner, &1000_0000000);
     client.approve(&owner, &spender, &500_0000000, &1000000);
-    client.set_whitelist(&admin, &owner, &false);
+    client.set_whitelist(&owner, &false);
     
     // Should panic - from (owner) not whitelisted
     client.transfer_from(&spender, &owner, &recipient, &200_0000000);
@@ -1420,18 +1420,18 @@ fn test_whitelist_removal_deletes_key() {
     let user = Address::generate(&e);
 
     // Add to whitelist
-    client.set_whitelist(&admin, &user, &true);
+    client.set_whitelist(&user, &true);
     assert!(client.is_whitelisted(&user));
 
     // Remove from whitelist — should delete the key, not set to false
-    client.set_whitelist(&admin, &user, &false);
+    client.set_whitelist(&user, &false);
     assert!(!client.is_whitelisted(&user));
 
     // Re-add to whitelist — should work correctly (proves key was deleted, not stuck at false)
-    client.set_whitelist(&admin, &user, &true);
+    client.set_whitelist(&user, &true);
     assert!(client.is_whitelisted(&user));
 
     // Remove again and verify
-    client.set_whitelist(&admin, &user, &false);
+    client.set_whitelist(&user, &false);
     assert!(!client.is_whitelisted(&user));
 }

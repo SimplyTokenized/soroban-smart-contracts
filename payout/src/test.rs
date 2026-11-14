@@ -1,6 +1,6 @@
 #![cfg(test)]
 use crate::{
-    PayoutContract, PayoutContractClient, DistributionState, DistributionMode, PayoutMethod,
+    PayoutContract, PayoutContractClient, DistributionState, PayoutMethod,
     Distribution,
 };
 use soroban_sdk::{
@@ -1445,12 +1445,13 @@ fn test_take_onchain_snapshot_zero_balance_existing_investor() {
     // Transfer tokens away so balance is 0
     token.transfer(&investor, &admin, &1000);
     
-    // Second snapshot - balance is now 0 (exercises old_balance > 0 with new balance == 0 path)
-    // _set_investor_balances_internal skips the balance>0 block, old balance remains in storage
+    // Second snapshot - balance is now 0, so the investor is removed from the distribution
     client.take_onchain_snapshot(&distribution_id, &investors, &methods);
-    
-    // Old balance remains since the zero-balance path doesn't update storage
-    assert_eq!(client.get_investor_balance(&distribution_id, &investor), 1000);
+
+    assert_eq!(client.get_investor_balance(&distribution_id, &investor), 0);
+    assert_eq!(client.get_investor_count(&distribution_id), 0);
+    assert_eq!(client.is_investor(&distribution_id, &investor), false);
+    assert_eq!(client.get_investor_list(&distribution_id).len(), 0);
 }
 
 #[test]
@@ -1580,7 +1581,7 @@ fn test_view_functions_via_invoke_contract() {
     let admin = Address::generate(&e);
     let sac = e.register_stellar_asset_contract_v2(admin.clone());
     let token = token::Client::new(&e, &sac.address());
-    let token_admin = token::StellarAssetClient::new(&e, &sac.address());
+    let _token_admin = token::StellarAssetClient::new(&e, &sac.address());
     let client = create_payout_contract(&e, &token);
     
     // Create and setup a distribution
@@ -1838,7 +1839,7 @@ fn test_fund_payout_token_funder_is_contract() {
     let distribution_id = client.create_distribution(&0, &token.address);
 
     // Use the contract's own address as funder — contract has no tokens
-    let contract_addr = client.address.clone();
+    let _contract_addr = client.address.clone();
     client.fund_payout_token(&admin, &distribution_id, &1000, &token.address);
 }
 
@@ -1874,4 +1875,154 @@ fn test_fund_payout_token_sourced_from_funder() {
     // Verify contract holds the tokens
     let contract_balance = token.balance(&client.address);
     assert_eq!(contract_balance, 1000, "Contract should hold 1000 tokens");
+}
+// ========== Regression Tests ==========
+
+#[test]
+fn test_take_onchain_snapshot_populates_investor_list() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let investor = Address::generate(&e);
+    let sac = e.register_stellar_asset_contract_v2(admin.clone());
+    let token = token::Client::new(&e, &sac.address());
+    let token_admin = token::StellarAssetClient::new(&e, &sac.address());
+    let client = create_payout_contract(&e, &token);
+
+    let distribution_id = client.create_distribution(&0, &token.address);
+
+    // Snapshot investor balances from the token contract
+    token_admin.mint(&investor, &1000);
+    let investors = Vec::from_array(&e, [investor.clone()]);
+    let methods = Vec::from_array(&e, [PayoutMethod::Claim]);
+    client.take_onchain_snapshot(&distribution_id, &investors, &methods);
+
+    // Regression: snapshot investors must be appended to InvestorList
+    let list = client.get_investor_list(&distribution_id);
+    assert_eq!(list.len(), 1);
+    assert_eq!(list.get(0).unwrap(), investor);
+
+    client.set_total_distribution_amount(&distribution_id, &1000);
+    client.advance_distribution_state(&distribution_id, &DistributionState::Compute);
+
+    token_admin.mint(&admin, &1000);
+    client.fund_payout_token(&admin, &distribution_id, &1000, &token.address);
+
+    client.compute_payout_amounts(&distribution_id, &1000);
+
+    // Without list insertion, compute iterates an empty InvestorList and the
+    // investor silently gets no payout amount.
+    assert_eq!(client.get_payout_amount(&distribution_id, &investor), 1000);
+}
+
+#[test]
+fn test_withdraw_unclaimed_updates_available_funds() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let investor = Address::generate(&e);
+    let sac = e.register_stellar_asset_contract_v2(admin.clone());
+    let token = token::Client::new(&e, &sac.address());
+    let token_admin = token::StellarAssetClient::new(&e, &sac.address());
+    let client = create_payout_contract(&e, &token);
+
+    let distribution_id = client.create_distribution(&0, &token.address);
+
+    let investors = Vec::from_array(&e, [investor.clone()]);
+    let balances = Vec::from_array(&e, [1000i128]);
+    let methods = Vec::from_array(&e, [PayoutMethod::Claim]);
+    client.set_investor_balances(&distribution_id, &investors, &balances, &methods);
+    client.set_total_distribution_amount(&distribution_id, &1000);
+
+    client.advance_distribution_state(&distribution_id, &DistributionState::Compute);
+
+    // Fund 2000 but only 1000 is claimable
+    token_admin.mint(&admin, &2000);
+    client.fund_payout_token(&admin, &distribution_id, &2000, &token.address);
+
+    client.compute_payout_amounts(&distribution_id, &1000);
+    client.advance_distribution_state(&distribution_id, &DistributionState::Payout);
+
+    client.claim_payout(&investor, &distribution_id);
+
+    client.advance_distribution_state(&distribution_id, &DistributionState::Done);
+
+    // 1000 remains unclaimed in the distribution pool
+    assert_eq!(client.get_distribution_available_funds(&distribution_id), 1000);
+
+    let withdrawn = client.withdraw_unclaimed(&distribution_id);
+    assert_eq!(withdrawn, 1000);
+
+    // Regression: the funds pool must be decremented on withdrawal
+    assert_eq!(client.get_distribution_available_funds(&distribution_id), 0);
+    assert_eq!(token.balance(&client.address), 0);
+}
+
+#[test]
+#[should_panic(expected = "Invalid balance")]
+fn test_set_investor_balances_negative_balance_panics() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_payout_contract(&e, &token);
+
+    let distribution_id = client.create_distribution(&0, &token.address);
+
+    let investors = Vec::from_array(&e, [Address::generate(&e)]);
+    let balances = Vec::from_array(&e, [-1i128]);
+    let methods = Vec::from_array(&e, [PayoutMethod::Claim]);
+    client.set_investor_balances(&distribution_id, &investors, &balances, &methods);
+}
+
+#[test]
+#[should_panic(expected = "Payout method must be set")]
+fn test_set_investor_balances_none_method_panics() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_payout_contract(&e, &token);
+
+    let distribution_id = client.create_distribution(&0, &token.address);
+
+    let investors = Vec::from_array(&e, [Address::generate(&e)]);
+    let balances = Vec::from_array(&e, [1000i128]);
+    let methods = Vec::from_array(&e, [PayoutMethod::None]);
+    client.set_investor_balances(&distribution_id, &investors, &balances, &methods);
+}
+
+#[test]
+fn test_set_investor_balances_zero_removes_only_that_investor() {
+    let e = Env::default();
+    e.mock_all_auths();
+
+    let admin = Address::generate(&e);
+    let token = create_token_contract(&e, &admin);
+    let client = create_payout_contract(&e, &token);
+
+    let distribution_id = client.create_distribution(&0, &token.address);
+
+    let investor1 = Address::generate(&e);
+    let investor2 = Address::generate(&e);
+    let investors = Vec::from_array(&e, [investor1.clone(), investor2.clone()]);
+    let balances = Vec::from_array(&e, [1000i128, 2000i128]);
+    let methods = Vec::from_array(&e, [PayoutMethod::Claim, PayoutMethod::Claim]);
+    client.set_investor_balances(&distribution_id, &investors, &balances, &methods);
+
+    // Zero out investor1 via a second batch call — it must be removed from the
+    // list while investor2 is preserved.
+    let balances2 = Vec::from_array(&e, [0i128, 2000i128]);
+    client.set_investor_balances(&distribution_id, &investors, &balances2, &methods);
+
+    let list = client.get_investor_list(&distribution_id);
+    assert_eq!(list.len(), 1);
+    assert_eq!(list.get(0).unwrap(), investor2);
+    assert_eq!(client.get_investor_count(&distribution_id), 1);
+    assert_eq!(client.get_investor_balance(&distribution_id, &investor1), 0);
+    assert_eq!(client.get_investor_balance(&distribution_id, &investor2), 2000);
 }

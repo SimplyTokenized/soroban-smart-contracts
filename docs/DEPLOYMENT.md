@@ -6,9 +6,15 @@ deployment, and `GOVERNANCE.md` for who may sign each step.
 
 ## 1. Build
 
+**Prerequisites:** Stellar CLI **≥ 25.2.0** and the `wasm32v1-none` target —
+required for soroban-sdk 28. Plain `cargo build --target wasm32v1-none` does
+**not** work on SDK 28; always use `stellar contract build`.
+
 ```bash
 rustup target add wasm32v1-none
-cargo build --release --target wasm32v1-none
+cd token && stellar contract build && cd ..
+cd crowdsale && stellar contract build && cd ..
+cd payout && stellar contract build && cd ..
 # artifacts: target/wasm32v1-none/release/{token,crowdsale,payout}.wasm
 ```
 
@@ -68,7 +74,7 @@ stellar contract invoke --id $PAYOUT --source deployer --network testnet -- \
 ```bash
 # Grant crowdsale the minter role on the token (required for buy)
 stellar contract invoke --id $TOKEN --source deployer --network testnet -- \
-  set_minter --_caller $TOKEN_OWNER_MSIG --account $CROWDSALE --enabled true
+  set_minter --account $CROWDSALE --enabled true
 
 # Verify
 stellar contract invoke --id $TOKEN --network testnet --is-view -- \

@@ -14,7 +14,7 @@ of three methods — investor **claim**, **automatic** batch transfer, or **bank
 | Crate | `payout` |
 | Source | `payout/src/lib.rs` |
 | Contract version | `1` (see `version()`) |
-| OZ components | `stellar-ownable`, `stellar-pausable`, `stellar-upgradeable` — v0.3.0 |
+| OZ components | `stellar-access` (Ownable), `stellar-contract-utils` (Pausable, Upgradeable) — v0.8.0 |
 | Deep-dive design doc | [`docs/PAYOUT_SPECIFICATION.md`](../PAYOUT_SPECIFICATION.md) |
 
 > The companion spec covers rationale, invariants, and worked examples. This
@@ -304,9 +304,9 @@ enabled}` · `(whitelist_requirement_updated)` → `{required}`
 
 ### Pausable / Ownable / Upgradeable
 
-Same OZ surface as the other contracts. Custom pause events: `(contract_paused)` →
-`ContractPausedEvent{caller}`, `(contract_unpaused)` → `ContractUnpausedEvent{caller}`
-— emitted **in addition to** OZ `paused`/`unpaused`.
+Same OZ surface as the other contracts. The legacy custom pause events
+(`contract_paused`/`contract_unpaused`) were removed in the v0.8.0 migration —
+only the OZ `paused`/`unpaused` events are emitted now.
 
 ## Event Index
 
@@ -326,7 +326,6 @@ Same OZ surface as the other contracts. Custom pause events: `(contract_paused)`
 | `payout_marked_as_paid` | automatic / bank batches | `(investor, amount)` — `0` for Bank |
 | `whitelist_updated` | add/remove whitelist | `WhitelistUpdatedEvent` |
 | `whitelist_requirement_updated` | `update_whitelist_requirement` | `{required}` |
-| `contract_paused` / `contract_unpaused` | `pause`/`unpause` | `{caller}` |
 | `paused` / `unpaused` | OZ pausable | `()` |
 | `ownership_*` | OZ ownable | see token doc |
 

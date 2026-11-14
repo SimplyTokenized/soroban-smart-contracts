@@ -1,13 +1,10 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Bytes, Env, Symbol, Vec};
-use stellar_ownable::{self as ownable, Ownable};
-use stellar_ownable_macro::only_owner;
-use stellar_pausable::{self as pausable, Pausable};
-use stellar_pausable_macros::when_not_paused;
-use stellar_upgradeable::UpgradeableInternal;
-use stellar_upgradeable_macros::Upgradeable;
-use stellar_default_impl_macro::default_impl;
+use soroban_sdk::{contract, contractevent, contractimpl, contracttype, token, Address, Bytes, BytesN, Env, MuxedAddress, Vec};
+use stellar_access::ownable::{self as ownable, Ownable};
+use stellar_contract_utils::pausable::{self as pausable, Pausable};
+use stellar_contract_utils::upgradeable::{self as upgradeable, Upgradeable};
+use stellar_macros::{only_owner, when_not_paused};
 
 // TTL constants for persistent storage (ledger-based)
 const MIN_TTL: u32 = 1_000_000;
@@ -121,19 +118,124 @@ pub struct WhitelistRequirementUpdatedEvent {
     pub required: bool,
 }
 
+// Typed contract events (preserve the legacy topics/data wire format)
+#[contractevent(topics = ["distribution_created"], data_format = "single-value")]
 #[derive(Clone)]
-#[contracttype]
-pub struct ContractPausedEvent {
-    pub caller: Address,
+pub struct DistributionCreated {
+    #[topic]
+    pub distribution_id: u64,
+    pub data: DistributionCreatedEvent,
 }
 
+#[contractevent(topics = ["distribution_state_advanced"], data_format = "single-value")]
 #[derive(Clone)]
-#[contracttype]
-pub struct ContractUnpausedEvent {
-    pub caller: Address,
+pub struct DistributionStateAdvanced {
+    #[topic]
+    pub distribution_id: u64,
+    pub data: DistributionStateAdvancedEvent,
 }
 
-#[derive(Upgradeable)]
+#[contractevent(topics = ["unclaimed_withdrawn"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct UnclaimedWithdrawn {
+    #[topic]
+    pub distribution_id: u64,
+    pub amount: i128,
+}
+
+#[contractevent(topics = ["investor_balances_set"], data_format = "vec")]
+#[derive(Clone)]
+pub struct InvestorBalancesSet {
+    #[topic]
+    pub distribution_id: u64,
+    pub investor_count: u64,
+    pub total_snapshot_balance: i128,
+}
+
+#[contractevent(topics = ["investor_balance_added"], data_format = "vec")]
+#[derive(Clone)]
+pub struct InvestorBalanceAdded {
+    #[topic]
+    pub distribution_id: u64,
+    pub investor: Address,
+    pub balance: i128,
+    pub total_snapshot_balance: i128,
+}
+
+#[contractevent(topics = ["payout_token_funded"], data_format = "vec")]
+#[derive(Clone)]
+pub struct PayoutTokenFunded {
+    #[topic]
+    pub distribution_id: u64,
+    pub amount: i128,
+    pub payout_token_amount: i128,
+}
+
+#[contractevent(topics = ["distribution_total_amount_set"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct DistributionTotalAmountSet {
+    #[topic]
+    pub distribution_id: u64,
+    pub amount: i128,
+}
+
+#[contractevent(topics = ["payout_amount_scaled"], data_format = "vec")]
+#[derive(Clone)]
+pub struct PayoutAmountScaled {
+    #[topic]
+    pub distribution_id: u64,
+    pub total_payout_amount: i128,
+    pub actual_payout_amount: i128,
+}
+
+#[contractevent(topics = ["payout_amounts_computed"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct PayoutAmountsComputed {
+    #[topic]
+    pub distribution_id: u64,
+    pub total_payout_amount: i128,
+}
+
+#[contractevent(topics = ["manual_payout_amounts_set"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct ManualPayoutAmountsSet {
+    #[topic]
+    pub distribution_id: u64,
+    pub investor_count: u32,
+}
+
+#[contractevent(topics = ["payout_claimed"], data_format = "vec")]
+#[derive(Clone)]
+pub struct PayoutClaimed {
+    #[topic]
+    pub distribution_id: u64,
+    pub investor: Address,
+    pub amount: i128,
+}
+
+#[contractevent(topics = ["payout_marked_as_paid"], data_format = "vec")]
+#[derive(Clone)]
+pub struct PayoutMarkedAsPaid {
+    #[topic]
+    pub distribution_id: u64,
+    pub investor: Address,
+    pub amount: i128,
+}
+
+#[contractevent(topics = ["whitelist_updated"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct WhitelistUpdated {
+    #[topic]
+    pub account: Address,
+    pub data: WhitelistUpdatedEvent,
+}
+
+#[contractevent(topics = ["whitelist_requirement_updated"], data_format = "single-value")]
+#[derive(Clone)]
+pub struct WhitelistRequirementUpdated {
+    pub data: WhitelistRequirementUpdatedEvent,
+}
+
 #[contract]
 pub struct PayoutContract;
 
@@ -245,15 +347,15 @@ impl PayoutContract {
             );
         
         // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "distribution_created"), distribution_id),
-                DistributionCreatedEvent {
-                    distribution_id,
-                    snapshot_ledger,
-                    payout_token: payout_token.clone(),
-                },
-            );
+        DistributionCreated {
+            distribution_id,
+            data: DistributionCreatedEvent {
+                distribution_id,
+                snapshot_ledger,
+                payout_token: payout_token.clone(),
+            },
+        }
+        .publish(e);
         
         distribution_id
     }
@@ -346,14 +448,14 @@ impl PayoutContract {
             .set(&DataKey::Distribution(distribution_id), &distribution);
 
         // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "distribution_state_advanced"), distribution_id),
-                DistributionStateAdvancedEvent {
-                    distribution_id,
-                    new_state,
-                },
-            );
+        DistributionStateAdvanced {
+            distribution_id,
+            data: DistributionStateAdvancedEvent {
+                distribution_id,
+                new_state,
+            },
+        }
+        .publish(e);
     }
 
     /// Withdraw unclaimed funds from a completed distribution (owner only)
@@ -383,7 +485,23 @@ impl PayoutContract {
 
         // Transfer unclaimed funds to owner
         let token_client = token::Client::new(e, &distribution.payout_token);
-        token_client.transfer(&e.current_contract_address(), &owner, &unclaimed_amount);
+        token_client.transfer(
+            &e.current_contract_address(),
+            &MuxedAddress::from(&owner),
+            &unclaimed_amount,
+        );
+
+        // Decrement the distribution funds pool so available-funds
+        // accounting reflects the withdrawal
+        let funds_key = DataKey::DistributionFunds(distribution_id, distribution.payout_token.clone());
+        let current_funds: i128 = e
+            .storage()
+            .persistent()
+            .get(&funds_key)
+            .unwrap_or(0i128);
+        e.storage()
+            .persistent()
+            .set(&funds_key, &(current_funds - unclaimed_amount));
 
         // Update distribution to prevent double-withdrawal
         distribution.payout_token_claimed = distribution.payout_token_amount;
@@ -392,11 +510,11 @@ impl PayoutContract {
             .set(&DataKey::Distribution(distribution_id), &distribution);
 
         // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "unclaimed_withdrawn"), distribution_id),
-                unclaimed_amount,
-            );
+        UnclaimedWithdrawn {
+            distribution_id,
+            amount: unclaimed_amount,
+        }
+        .publish(e);
 
         unclaimed_amount
     }
@@ -420,7 +538,7 @@ impl PayoutContract {
         balances: Vec<i128>,
         methods: Vec<PayoutMethod>,
     ) {
-        let mut distribution: Distribution = e
+        let distribution: Distribution = e
             .storage()
             .persistent()
             .get(&DataKey::Distribution(distribution_id))
@@ -444,124 +562,7 @@ impl PayoutContract {
             panic!("Invalid batch size");
         }
 
-        let mut balance_delta = 0i128;
-
-        for i in 0..investors.len() {
-            let investor = investors.get(i).unwrap();
-            let balance = balances.get(i).unwrap();
-            let method = methods.get(i).unwrap();
-
-            if balance < 0 {
-                panic!("Invalid balance");
-            }
-            if method == PayoutMethod::None {
-                panic!("Payout method must be set");
-            }
-
-            let old_balance: i128 = e
-                .storage()
-                .persistent()
-                .get(&DataKey::SnapshotBalance(distribution_id, investor.clone()))
-                .unwrap_or(0i128);
-            
-            let old_method: PayoutMethod = e
-                .storage()
-                .persistent()
-                .get(&DataKey::PayoutPreference(distribution_id, investor.clone()))
-                .unwrap_or(PayoutMethod::None);
-
-            // Update balances per payout method tracking
-            if old_balance > 0 && old_method != PayoutMethod::None {
-                match old_method {
-                    PayoutMethod::Claim => distribution.claim_balance -= old_balance,
-                    PayoutMethod::Automatic => distribution.automatic_balance -= old_balance,
-                    PayoutMethod::Bank => distribution.bank_balance -= old_balance,
-                    PayoutMethod::None => {}
-                }
-            }
-
-            if balance > 0 {
-                if old_balance == 0 {
-                    // New investor in this distribution
-                    e.storage()
-                        .persistent()
-                        .set(&DataKey::IsInvestor(distribution_id, investor.clone()), &true);
-                    distribution.investor_count += 1;
-                    balance_delta += balance;
-
-                    // Add to investor list
-                    let mut investor_list: Vec<Address> = e
-                        .storage()
-                        .persistent()
-                        .get(&DataKey::InvestorList(distribution_id))
-                        .unwrap_or(Vec::new(e));
-                    investor_list.push_back(investor.clone());
-                    e.storage()
-                        .persistent()
-                        .set(&DataKey::InvestorList(distribution_id), &investor_list);
-                } else {
-                    // Update existing investor - adjust delta
-                    balance_delta = balance_delta + balance - old_balance;
-                }
-
-                e.storage()
-                    .persistent()
-                    .set(&DataKey::SnapshotBalance(distribution_id, investor.clone()), &balance);
-                e.storage()
-                    .persistent()
-                    .set(&DataKey::PayoutPreference(distribution_id, investor.clone()), &method);
-
-                // Update per-method totals
-                match method {
-                    PayoutMethod::Claim => distribution.claim_balance += balance,
-                    PayoutMethod::Automatic => distribution.automatic_balance += balance,
-                    PayoutMethod::Bank => distribution.bank_balance += balance,
-                    PayoutMethod::None => {}
-                }
-            } else if balance == 0 && old_balance > 0 {
-                // Balance set to zero - remove investor from distribution
-                e.storage()
-                    .persistent()
-                    .remove(&DataKey::SnapshotBalance(distribution_id, investor.clone()));
-                e.storage()
-                    .persistent()
-                    .remove(&DataKey::PayoutPreference(distribution_id, investor.clone()));
-                e.storage()
-                    .persistent()
-                    .remove(&DataKey::IsInvestor(distribution_id, investor.clone()));
-                distribution.investor_count -= 1;
-                balance_delta -= old_balance;
-
-                // Remove from investor list
-                let investor_list: Vec<Address> = e
-                    .storage()
-                    .persistent()
-                    .get(&DataKey::InvestorList(distribution_id))
-                    .unwrap_or(Vec::new(e));
-                let mut new_list = Vec::new(e);
-                for i in 0..investor_list.len() {
-                    let addr = investor_list.get(i).unwrap();
-                    if addr != investor {
-                        new_list.push_back(addr.clone());
-                    }
-                }
-                e.storage()
-                    .persistent()
-                    .set(&DataKey::InvestorList(distribution_id), &new_list);
-            }
-        }
-
-        distribution.total_snapshot_balance += balance_delta;
-        e.storage()
-            .persistent()
-            .set(&DataKey::Distribution(distribution_id), &distribution);
-
-        // Emit event (simplified - EVM emits per investor but we emit batch for efficiency)
-        e.events()
-            .publish(
-                (Symbol::new(e, "investor_balances_set"), distribution_id),
-                (distribution.investor_count, distribution.total_snapshot_balance),
-            );
+        Self::_set_investor_balances_internal(e, distribution_id, investors, balances, methods);
     }
 
     /// Set a single investor balance and payout method
@@ -691,11 +692,13 @@ impl PayoutContract {
             .set(&DataKey::Distribution(distribution_id), &distribution);
 
         // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "investor_balance_added"), distribution_id),
-                (investor.clone(), balance, distribution.total_snapshot_balance),
-            );
+        InvestorBalanceAdded {
+            distribution_id,
+            investor: investor.clone(),
+            balance,
+            total_snapshot_balance: distribution.total_snapshot_balance,
+        }
+        .publish(e);
     }
 
     /// Take on-chain snapshot by reading token balances
@@ -777,12 +780,19 @@ impl PayoutContract {
             let balance = balances.get(i).unwrap();
             let method = methods.get(i).unwrap();
 
+            if balance < 0 {
+                panic!("Invalid balance");
+            }
+            if method == PayoutMethod::None {
+                panic!("Payout method must be set");
+            }
+
             let old_balance: i128 = e
                 .storage()
                 .persistent()
                 .get(&DataKey::SnapshotBalance(distribution_id, investor.clone()))
                 .unwrap_or(0i128);
-            
+
             let old_method: PayoutMethod = e
                 .storage()
                 .persistent()
@@ -801,12 +811,25 @@ impl PayoutContract {
 
             if balance > 0 {
                 if old_balance == 0 {
+                    // New investor in this distribution
                     e.storage()
                         .persistent()
                         .set(&DataKey::IsInvestor(distribution_id, investor.clone()), &true);
                     distribution.investor_count += 1;
                     balance_delta += balance;
+
+                    // Add to investor list
+                    let mut investor_list: Vec<Address> = e
+                        .storage()
+                        .persistent()
+                        .get(&DataKey::InvestorList(distribution_id))
+                        .unwrap_or(Vec::new(e));
+                    investor_list.push_back(investor.clone());
+                    e.storage()
+                        .persistent()
+                        .set(&DataKey::InvestorList(distribution_id), &investor_list);
                 } else {
+                    // Update existing investor - adjust delta
                     balance_delta = balance_delta + balance - old_balance;
                 }
 
@@ -817,12 +840,43 @@ impl PayoutContract {
                     .persistent()
                     .set(&DataKey::PayoutPreference(distribution_id, investor.clone()), &method);
 
+                // Update per-method totals
                 match method {
                     PayoutMethod::Claim => distribution.claim_balance += balance,
                     PayoutMethod::Automatic => distribution.automatic_balance += balance,
                     PayoutMethod::Bank => distribution.bank_balance += balance,
                     PayoutMethod::None => {}
                 }
+            } else if balance == 0 && old_balance > 0 {
+                // Balance set to zero - remove investor from distribution
+                e.storage()
+                    .persistent()
+                    .remove(&DataKey::SnapshotBalance(distribution_id, investor.clone()));
+                e.storage()
+                    .persistent()
+                    .remove(&DataKey::PayoutPreference(distribution_id, investor.clone()));
+                e.storage()
+                    .persistent()
+                    .remove(&DataKey::IsInvestor(distribution_id, investor.clone()));
+                distribution.investor_count -= 1;
+                balance_delta -= old_balance;
+
+                // Remove from investor list
+                let investor_list: Vec<Address> = e
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::InvestorList(distribution_id))
+                    .unwrap_or(Vec::new(e));
+                let mut new_list = Vec::new(e);
+                for j in 0..investor_list.len() {
+                    let addr = investor_list.get(j).unwrap();
+                    if addr != investor {
+                        new_list.push_back(addr.clone());
+                    }
+                }
+                e.storage()
+                    .persistent()
+                    .set(&DataKey::InvestorList(distribution_id), &new_list);
             }
         }
 
@@ -831,11 +885,12 @@ impl PayoutContract {
             .persistent()
             .set(&DataKey::Distribution(distribution_id), &distribution);
 
-        e.events()
-            .publish(
-                (Symbol::new(e, "investor_balances_set"), distribution_id),
-                (distribution.investor_count, distribution.total_snapshot_balance),
-            );
+        InvestorBalancesSet {
+            distribution_id,
+            investor_count: distribution.investor_count,
+            total_snapshot_balance: distribution.total_snapshot_balance,
+        }
+        .publish(e);
     }
 
     // ========== Investor Query Functions ==========
@@ -899,7 +954,11 @@ impl PayoutContract {
         // Transfer tokens from funder to contract
         funder.require_auth();
         let token_client = token::Client::new(e, &token);
-        token_client.transfer(&funder, &e.current_contract_address(), &amount);
+        token_client.transfer(
+            &funder,
+            &MuxedAddress::from(&e.current_contract_address()),
+            &amount,
+        );
 
         // Update distribution funding
         distribution.payout_token_amount += amount;
@@ -918,11 +977,12 @@ impl PayoutContract {
             .set(&DataKey::DistributionFunds(distribution_id, token), &(current_funds + amount));
 
         // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "payout_token_funded"), distribution_id),
-                (amount, distribution.payout_token_amount),
-            );
+        PayoutTokenFunded {
+            distribution_id,
+            amount,
+            payout_token_amount: distribution.payout_token_amount,
+        }
+        .publish(e);
     }
 
     /// Set total distribution amount (includes Bank method payouts)
@@ -948,11 +1008,11 @@ impl PayoutContract {
             .set(&DataKey::Distribution(distribution_id), &distribution);
 
         // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "distribution_total_amount_set"), distribution_id),
-                amount,
-            );
+        DistributionTotalAmountSet {
+            distribution_id,
+            amount,
+        }
+        .publish(e);
     }
 
     /// Get required funding amount (O(1) calculation for Claim + Automatic only)
@@ -1038,11 +1098,12 @@ impl PayoutContract {
 
         if actual_payout_amount < total_payout_amount {
             // Emit warning event if scaling occurred
-            e.events()
-                .publish(
-                    (Symbol::new(e, "payout_amount_scaled"), distribution_id),
-                    (total_payout_amount, actual_payout_amount),
-                );
+            PayoutAmountScaled {
+                distribution_id,
+                total_payout_amount,
+                actual_payout_amount,
+            }
+            .publish(e);
         }
 
         // Get investor list
@@ -1078,11 +1139,11 @@ impl PayoutContract {
         }
 
         // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "payout_amounts_computed"), distribution_id),
-                total_payout_amount,
-            );
+        PayoutAmountsComputed {
+            distribution_id,
+            total_payout_amount,
+        }
+        .publish(e);
     }
 
     /// Set manual payout amounts (Manual mode)
@@ -1135,11 +1196,11 @@ impl PayoutContract {
         }
 
         // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "manual_payout_amounts_set"), distribution_id),
-                investors.len(),
-            );
+        ManualPayoutAmountsSet {
+            distribution_id,
+            investor_count: investors.len(),
+        }
+        .publish(e);
     }
 
     /// Get payout amount for investor
@@ -1230,7 +1291,11 @@ impl PayoutContract {
 
         // Transfer tokens from distribution pool to investor
         let token_client = token::Client::new(e, &distribution.payout_token);
-        token_client.transfer(&e.current_contract_address(), &investor, &payout_amount);
+        token_client.transfer(
+            &e.current_contract_address(),
+            &MuxedAddress::from(&investor),
+            &payout_amount,
+        );
 
         // Decrement from distribution-specific funds pool
         e.storage()
@@ -1249,11 +1314,12 @@ impl PayoutContract {
             .set(&DataKey::Distribution(distribution_id), &distribution);
 
         // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "payout_claimed"), distribution_id),
-                (investor.clone(), payout_amount),
-            );
+        PayoutClaimed {
+            distribution_id,
+            investor: investor.clone(),
+            amount: payout_amount,
+        }
+        .publish(e);
     }
 
     /// Batch distribute automatic payouts (Automatic method)
@@ -1325,7 +1391,11 @@ impl PayoutContract {
             }
 
             // Transfer tokens (investor is already &Address from Vec::get)
-            token_client.transfer(&e.current_contract_address(), &investor, &payout_amount);
+            token_client.transfer(
+                &e.current_contract_address(),
+                &MuxedAddress::from(&investor),
+                &payout_amount,
+            );
 
             // Decrement from distribution-specific funds pool
             e.storage()
@@ -1341,11 +1411,12 @@ impl PayoutContract {
             distribution.payout_token_claimed += payout_amount;
 
             // Emit event per investor
-            e.events()
-                .publish(
-                    (Symbol::new(e, "payout_marked_as_paid"), distribution_id),
-                    (investor.clone(), payout_amount),
-                );
+            PayoutMarkedAsPaid {
+                distribution_id,
+                investor: investor.clone(),
+                amount: payout_amount,
+            }
+            .publish(e);
         }
 
         e.storage()
@@ -1405,11 +1476,12 @@ impl PayoutContract {
                 .set(&DataKey::PaidOut(distribution_id, investor.clone()), &true);
 
             // Emit event
-            e.events()
-                .publish(
-                    (Symbol::new(e, "payout_marked_as_paid"), distribution_id),
-                    (investor.clone(), 0i128), // 0 amount for Bank method
-                );
+            PayoutMarkedAsPaid {
+                distribution_id,
+                investor: investor.clone(),
+                amount: 0i128, // 0 amount for Bank method
+            }
+            .publish(e);
         }
     }
 
@@ -1529,14 +1601,14 @@ impl PayoutContract {
             .set(&DataKey::Whitelist(account.clone()), &true);
 
         // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "whitelist_updated"), account.clone()),
-                WhitelistUpdatedEvent {
-                    account: account.clone(),
-                    enabled: true,
-                },
-            );
+        WhitelistUpdated {
+            account: account.clone(),
+            data: WhitelistUpdatedEvent {
+                account: account.clone(),
+                enabled: true,
+            },
+        }
+        .publish(e);
     }
 
     /// Remove address from whitelist (owner only)
@@ -1547,14 +1619,14 @@ impl PayoutContract {
             .remove(&DataKey::Whitelist(account.clone()));
 
         // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "whitelist_updated"), account.clone()),
-                WhitelistUpdatedEvent {
-                    account: account.clone(),
-                    enabled: false,
-                },
-            );
+        WhitelistUpdated {
+            account: account.clone(),
+            data: WhitelistUpdatedEvent {
+                account: account.clone(),
+                enabled: false,
+            },
+        }
+        .publish(e);
     }
 
     /// Update whitelist requirement (owner only)
@@ -1565,11 +1637,10 @@ impl PayoutContract {
             .set(&Bytes::from_slice(e, REQUIRE_WHITELIST_KEY.as_bytes()), &required);
 
         // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "whitelist_requirement_updated"),),
-                WhitelistRequirementUpdatedEvent { required },
-            );
+        WhitelistRequirementUpdated {
+            data: WhitelistRequirementUpdatedEvent { required },
+        }
+        .publish(e);
     }
 
     // ========== View Functions ==========
@@ -1614,54 +1685,33 @@ impl PayoutContract {
 //
 // ─── Pausable Implementation ─────────────────────────────────────────────────
 //
-#[contractimpl]
+#[contractimpl(contracttrait)]
 impl Pausable for PayoutContract {
-    fn paused(e: &Env) -> bool {
-        pausable::paused(e)
-    }
-
     #[only_owner]
     fn pause(e: &Env, _caller: Address) {
         pausable::pause(e);
-        
-        // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "contract_paused"),),
-                ContractPausedEvent {
-                    caller: _caller.clone(),
-                },
-            );
     }
 
     #[only_owner]
     fn unpause(e: &Env, _caller: Address) {
         pausable::unpause(e);
-        
-        // Emit event
-        e.events()
-            .publish(
-                (Symbol::new(e, "contract_unpaused"),),
-                ContractUnpausedEvent {
-                    caller: _caller.clone(),
-                },
-            );
     }
 }
 
 //
 // ─── Ownable Implementation ──────────────────────────────────────────────────
 //
-#[default_impl]
-#[contractimpl]
+#[contractimpl(contracttrait)]
 impl Ownable for PayoutContract {}
 
 //
 // ─── Upgradeable Implementation ──────────────────────────────────────────────
 //
-impl UpgradeableInternal for PayoutContract {
-    fn _require_auth(e: &Env, _operator: &Address) {
-        ownable::enforce_owner_auth(e);
+#[contractimpl]
+impl Upgradeable for PayoutContract {
+    #[only_owner]
+    fn upgrade(e: &Env, new_wasm_hash: BytesN<32>, _operator: Address) {
+        upgradeable::upgrade(e, &new_wasm_hash);
     }
 }
 

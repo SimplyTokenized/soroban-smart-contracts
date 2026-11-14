@@ -87,9 +87,9 @@ sleep 20   # allow watcher startup + first checkpoint
 echo "==> Firing monitored on-chain actions"
 stellar contract invoke --id "$TOKEN_ID" --source "$IDENTITY" --network testnet -- pause --caller "$OWNER" | tail -2
 stellar contract invoke --id "$TOKEN_ID" --source "$IDENTITY" --network testnet -- unpause --caller "$OWNER" | tail -2
-stellar contract invoke --id "$TOKEN_ID" --source "$IDENTITY" --network testnet -- set_whitelist --_caller "$OWNER" --account "$OWNER" --whitelisted true | tail -2
-stellar contract invoke --id "$CROWD_ID" --source "$IDENTITY" --network testnet -- set_test_mode --_caller "$OWNER" --enabled true | tail -2
-stellar contract invoke --id "$CROWD_ID" --source "$IDENTITY" --network testnet -- support_asset --_caller "$OWNER" --asset_contract "$TOKEN_ID" | tail -2
+stellar contract invoke --id "$TOKEN_ID" --source "$IDENTITY" --network testnet -- set_whitelist --account "$OWNER" --whitelisted true | tail -2
+stellar contract invoke --id "$CROWD_ID" --source "$IDENTITY" --network testnet -- set_test_mode --enabled true | tail -2
+stellar contract invoke --id "$CROWD_ID" --source "$IDENTITY" --network testnet -- support_asset --asset_contract "$TOKEN_ID" | tail -2
 stellar contract invoke --id "$PAYOUT_ID" --source "$IDENTITY" --network testnet -- create_distribution --snapshot_ledger 1 --payout_token "$TOKEN_ID" | tail -2
 
 echo "==> Crafting a deliberately FAILED tx to the token contract"

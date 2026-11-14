@@ -8,7 +8,7 @@ Stellar, where native account multisig provides the enforcement layer.
 
 ## 1. Roles and Powers
 
-The contracts use OpenZeppelin `stellar-ownable` — a **single owner** per
+The contracts use OpenZeppelin `stellar-access` (Ownable) — a **single owner** per
 contract plus one subordinate role (token minter). There is no on-chain
 multi-role access control; role separation is achieved by using different
 accounts for different duties.
@@ -74,7 +74,7 @@ independent verification.
 | Minimize admin powers; prefer immutable parameters | Minting cap can only increase; `open_sale` cannot re-run once tokens are sold; distribution state machine is forward-only |
 | Multisig admin (e.g. Safe on EVM) | Stellar native account multisig on each contract's owner account |
 | Timelock / delayed execution | Soroban has no `TimelockController` equivalent → substitute an **announcement window**: every non-emergency privileged action is announced ≥ 48 h (mainnet) before execution via the project status channel, and monitoring alerts verify the executed action matches the announcement |
-| Two-step ownership transfer | Built into OZ `stellar-ownable` (`transfer_ownership` → `accept_ownership` with a ledger-deadline) |
+| Two-step ownership transfer | Built into OZ `stellar-access` Ownable (`transfer_ownership` → `accept_ownership` with a ledger-deadline) |
 | Monitoring of privileged actions | OpenZeppelin Monitor configs in `monitoring/` — every privileged function alerts |
 | Incident response / pause | OZ `Pausable` on all three contracts; runbooks in `docs/MONITORING.md` |
 | Upgrade governance | `upgrade` is owner-gated; procedure §5 adds review + verification requirements |
@@ -151,7 +151,7 @@ change is needed — written up and linked from `SECURITY.md`'s audit history.
   `monitoring/monitors/` — admin actions cannot go unnoticed.
 - On-chain evidence: function invocations are publicly visible; events
   (`cap_change`, `treasury_updated`, `emergency_sale_reset`, `ownership_transfer*`,
-  `contract_paused`, `distribution_state_advanced`, …) provide the audit trail —
+  `paused`/`unpaused`, `distribution_state_advanced`, …) provide the audit trail —
   see each contract doc's Event Index.
 - `set_test_mode` and `set_user_cap` emit no events; they are still caught by the
   function-invocation monitors.

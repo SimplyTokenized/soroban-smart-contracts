@@ -29,7 +29,7 @@ stellar contract invoke --id $TOKEN --source owner --network testnet -- \
 
 # Register the crowdsale as a minter (required before any buy)
 stellar contract invoke --id $TOKEN --source owner --network testnet -- \
-  set_minter --_caller $OWNER --account $CROWDSALE --enabled true
+  set_minter --account $CROWDSALE --enabled true
 
 # Read balance
 stellar contract invoke --id $TOKEN --network testnet --is-view -- \
@@ -41,14 +41,14 @@ stellar contract invoke --id $TOKEN --network testnet --is-view -- \
 ```bash
 # Open a sale (timestamps are unix seconds; caps/price in token smallest units)
 stellar contract invoke --id $CROWDSALE --source owner --network testnet -- \
-  open_sale --_caller $OWNER \
+  open_sale \
   --start_time 1730000000 --end_time 1737504000 \
   --price_numerator 10 --price_denominator 1 \
   --global_cap 10000000000000 --min_tokens_received 0
 
 # Enable a payment asset (SEP-41 token contract id)
 stellar contract invoke --id $CROWDSALE --source owner --network testnet -- \
-  support_asset --_caller $OWNER --asset_contract $USDC_CONTRACT --enabled true
+  support_asset --asset_contract $USDC_CONTRACT --enabled true
 
 # Buy (called by the buyer; buyer must authorize both this call and, implicitly,
 # the stablecoin transfer the contract performs on their behalf)
@@ -155,9 +155,10 @@ contract invoke`/`simulateTransaction` previews errors without cost.
   whitelist checks `from`, `to`, `spender` on transfers).
 - **Stale oracle** — Reflector feeds update periodically; a `buy` reverts if the
   last price is > 3600 s old. Alert on a run of `buy` failures (see monitoring).
-- **`calculate_tokens` vs `buy` divergence** — the view normalizes payment amounts
-  to 18 decimals; `buy` does not. Quotes can differ from executed amounts for
-  payment tokens with unusual decimals.
+- **`calculate_tokens` == `buy` pricing** — both share the same code path and
+  price the raw payment amount in the asset's base units. Quotes always match
+  executed amounts. (`calculate_tokens` still returns `0` instead of panicking
+  on pricing failures.)
 - **Batch size** — payout investor batches > 200 entries revert; chunk client-side.
 - **Persistent storage archival** — untouched persistent entries can archive after
   the TTL (~1M ledgers minimum on these keys). See `docs/DEPLOYMENT.md#state-archival`.
